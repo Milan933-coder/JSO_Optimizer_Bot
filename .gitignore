@@ -1,0 +1,84 @@
+# =========================
+# Secrets / Environment
+# =========================
+.env
+.env.*
+*.env
+*.env.*
+.envrc
+**/.env
+**/.env.*
+
+# Common secret files / folders
+secrets/
+**/secrets/
+**/*_secret.*
+**/*-secret.*
+**/secret.*
+**/*.token
+**/*.tokens
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+
+# =========================
+# Node / Frontend
+# =========================
+node_modules/
+dist/
+dist-ssr/
+build/
+.cache/
+.vite/
+.next/
+.nuxt/
+.svelte-kit/
+*.local
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# =========================
+# Python / Backend
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+ENV/
+pip-wheel-metadata/
+
+# =========================
+# Editor / OS
+# =========================
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# =========================
+# Legacy project-specific ignores
+# (kept to preserve prior intent)
+# =========================
+HR_Project/utils/.env
+HR_Project/HR_VENV
+Hiring_Assitant/backend/.env
+Hiring_Assitant/backend/venv

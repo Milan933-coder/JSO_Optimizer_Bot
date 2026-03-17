@@ -1,0 +1,19 @@
+github:
+  username: "your_github_username"
+  max_repos: 5
+  commit_limit: 20
+
+llm:
+  provider: "openai"   # openai | claude | gemini
+  model: "gpt-4o-mini"
+articles:
+  links:
+    - "https://example.com/article1"
+    - "https://example.com/article2"
+    - "https://example.com/article3"
+
+  max_articles: 2
+api_keys:
+  openai: "YOUR_OPENAI_KEY"
+  claude: "YOUR_ANTHROPIC_KEY"
+  gemini: "YOUR_GEMINI_KEY"

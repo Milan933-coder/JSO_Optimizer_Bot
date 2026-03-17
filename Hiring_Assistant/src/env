@@ -1,0 +1,2 @@
+# .env  (add this to your repo root — already in .gitignore)
+VITE_API_URL=http://localhost:8080
