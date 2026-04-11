@@ -17,12 +17,13 @@ Usage:
     result = agent.ask("Show me React developers with 5+ years experience")
 """
 
+import builtins
 import json
 import datetime
 import sys
 import os
 
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from utils.config import LOG_QUERIES, ENABLE_SEMANTIC, SEMANTIC_MIN_QUERY_CHARS
 from agents.intent_classifier import classify_intent
 from agents.text_to_sql_agent import run_text_to_sql, fix_and_retry
@@ -63,6 +64,16 @@ def _should_use_semantic(intent: str, query: str, sem_params: dict) -> bool:
     if sem_params.get("jd_text"):
         return True
     return _looks_like_jd(query)
+
+
+def _safe_print(message: str = "") -> None:
+    try:
+        builtins.print(message)
+    except UnicodeEncodeError:
+        builtins.print(message.encode("ascii", errors="replace").decode("ascii"))
+
+
+print = _safe_print
 
 
 class HRAgent:

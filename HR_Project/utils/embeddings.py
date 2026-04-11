@@ -19,7 +19,7 @@ from typing import Optional
 import sys
 import os
 
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from utils.config import DB_PATH, TOP_K_RESULTS, SIMILARITY_THRESHOLD
 from database.setup_db import get_connection
 

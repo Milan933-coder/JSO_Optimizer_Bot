@@ -91,7 +91,41 @@ class InterviewQuestion:
     technology:  str
     difficulty:  str
     question:    str
+    focus_area:  str = ""
+    evaluation_rubric: List[str] = field(default_factory=list)
     answered:    bool = False
+    candidate_answer: Optional[str] = None
+    review:      Optional["InterviewAnswerReview"] = None
+
+
+@dataclass
+class InterviewAnswerReview:
+    question_id: int
+    question: str
+    technology: str
+    focus_area: str
+    technical_score: float
+    explanation_score: float
+    communication_score: float
+    overall_score: float
+    verdict: str
+    review: str
+    strengths: List[str] = field(default_factory=list)
+    improvements: List[str] = field(default_factory=list)
+    communication_notes: str = ""
+
+
+@dataclass
+class FinalInterviewAssessment:
+    status: str
+    readiness_score: float
+    technical_depth_score: float
+    communication_score: float
+    summary: str
+    strengths: List[str] = field(default_factory=list)
+    improvement_areas: List[str] = field(default_factory=list)
+    recommended_actions: List[str] = field(default_factory=list)
+    coverage_note: Optional[str] = None
 
 
 @dataclass
@@ -169,6 +203,7 @@ class SessionState:
     questions:         List[InterviewQuestion] = field(default_factory=list)
     current_question_index: int = 0
     deviation_count:   int = 0                # Max 3 before termination
+    final_interview_assessment: Optional[FinalInterviewAssessment] = None
     coding_round:      CodingRoundState = field(default_factory=CodingRoundState)
 
     # Message history (for LLM context window)
@@ -198,10 +233,14 @@ class SessionState:
                 id=q["id"],
                 technology=q["technology"],
                 difficulty=q["difficulty"],
+                focus_area=q.get("focus_area", q["technology"]),
                 question=q["question"],
+                evaluation_rubric=q.get("evaluation_rubric", []),
             )
             for q in questions
         ]
+        self.current_question_index = 0
+        self.final_interview_assessment = None
         self.phase = ConversationPhase.INTERVIEWING
 
     # ── Deviation Management ─────────────────────────────────────────────────
@@ -229,6 +268,45 @@ class SessionState:
         if self.current_question_index < len(self.questions):
             self.questions[self.current_question_index].answered = True
             self.current_question_index += 1
+
+    def record_answer_review(self, answer: str, review_data: dict) -> Optional[InterviewAnswerReview]:
+        question = self.get_current_question()
+        if not question:
+            return None
+
+        question.candidate_answer = answer.strip()
+        question.review = InterviewAnswerReview(
+            question_id=question.id,
+            question=question.question,
+            technology=question.technology,
+            focus_area=question.focus_area,
+            technical_score=float(review_data.get("technical_score", 0)),
+            explanation_score=float(review_data.get("explanation_score", 0)),
+            communication_score=float(review_data.get("communication_score", 0)),
+            overall_score=float(review_data.get("overall_score", 0)),
+            verdict=str(review_data.get("verdict", "Needs improvement")).strip() or "Needs improvement",
+            review=str(review_data.get("review", "")).strip(),
+            strengths=list(review_data.get("strengths", [])),
+            improvements=list(review_data.get("improvements", [])),
+            communication_notes=str(review_data.get("communication_notes", "")).strip(),
+        )
+        return question.review
+
+    def get_answer_reviews(self) -> List[InterviewAnswerReview]:
+        return [question.review for question in self.questions if question.review]
+
+    def set_final_interview_assessment(self, assessment_data: dict):
+        self.final_interview_assessment = FinalInterviewAssessment(
+            status=str(assessment_data.get("status", "Assessment pending")).strip() or "Assessment pending",
+            readiness_score=float(assessment_data.get("readiness_score", 0)),
+            technical_depth_score=float(assessment_data.get("technical_depth_score", 0)),
+            communication_score=float(assessment_data.get("communication_score", 0)),
+            summary=str(assessment_data.get("summary", "")).strip(),
+            strengths=list(assessment_data.get("strengths", [])),
+            improvement_areas=list(assessment_data.get("improvement_areas", [])),
+            recommended_actions=list(assessment_data.get("recommended_actions", [])),
+            coverage_note=str(assessment_data.get("coverage_note", "")).strip() or None,
+        )
 
     def all_questions_answered(self) -> bool:
         return (

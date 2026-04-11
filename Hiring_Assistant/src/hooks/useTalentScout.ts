@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
 
 import {
   runCodingRoundRequest,
   startCodingRoundRequest,
   submitCodingRoundRequest,
 } from "@/coding-round/api";
+import type { CandidateInfoFormValues } from "@/components/chat/CandidateInfoForm";
 import type { CodingRoundState } from "@/coding-round/types";
 import { API_BASE } from "@/lib/api";
 import type { ChatMessage } from "@/types/chat";
@@ -28,9 +29,13 @@ interface TalentScoutState {
   isClosed: boolean;
   phase: string;
   codingRound: CodingRoundState | null;
+  hasActiveSession: boolean;
+  sessionError: string | null;
+  submitCandidateInfo: (values: CandidateInfoFormValues) => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
   sendVoiceMessage: (audioBlob: Blob) => Promise<void>;
   sendCvFile: (file: File) => Promise<void>;
+  stopSession: () => Promise<void>;
   startCodingRound: () => Promise<void>;
   runCodingRound: (input: {
     sourceCode: string;
@@ -44,13 +49,29 @@ interface TalentScoutState {
   clearChat: () => void;
 }
 
-async function safeJson(res: Response): Promise<any> {
+interface TalentScoutResponsePayload {
+  session_id?: string;
+  reply?: string;
+  phase?: string;
+  is_closed?: boolean;
+  coding_round?: CodingRoundState | null;
+  detail?: string;
+  transcript?: string;
+  audio_base64?: string;
+  audio_mime_type?: string;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Something went wrong.";
+}
+
+async function safeJson(res: Response): Promise<TalentScoutResponsePayload> {
   const text = await res.text();
   if (!text || text.trim() === "") {
     throw new Error(`Server returned empty response (status ${res.status})`);
   }
   try {
-    return JSON.parse(text);
+    return JSON.parse(text) as TalentScoutResponsePayload;
   } catch {
     throw new Error(`Server error (${res.status}): ${text.slice(0, 200)}`);
   }
@@ -81,6 +102,19 @@ function normalizeAssistantReply(
   return reply.trim();
 }
 
+function buildCandidateSummary(values: CandidateInfoFormValues): string {
+  return [
+    "Candidate details submitted:",
+    `Full Name: ${values.name}`,
+    `Email Address: ${values.email}`,
+    `Phone Number: ${values.phone}`,
+    `Years of Experience: ${values.yearsExperience}`,
+    `Desired Position(s): ${values.desiredPosition}`,
+    `Current Location: ${values.location}`,
+    `Tech Stack: ${values.techStack}`,
+  ].join("\n");
+}
+
 export function useTalentScout({
   provider,
   apiKey,
@@ -95,14 +129,9 @@ export function useTalentScout({
   const [isClosed, setIsClosed] = useState(false);
   const [phase, setPhase] = useState("INFO_PENDING");
   const [codingRound, setCodingRound] = useState<CodingRoundState | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const questionProgressRef = useRef({ current: 0, total: 0 });
-
-  useEffect(() => {
-    if (provider && apiKey && apiKey.trim().length > 10) {
-      void initSession();
-    }
-  }, [provider, apiKey]);
 
   const applyServerState = (data: {
     phase: string;
@@ -114,11 +143,12 @@ export function useTalentScout({
     setCodingRound(data.coding_round ?? null);
   };
 
-  const initSession = async () => {
+  const initSession = useCallback(async () => {
     setMessages([]);
     setIsClosed(false);
     setPhase("INFO_PENDING");
     setCodingRound(null);
+    setSessionError(null);
     sessionIdRef.current = null;
     questionProgressRef.current = { current: 0, total: 0 };
     setIsLoading(true);
@@ -135,24 +165,46 @@ export function useTalentScout({
         throw new Error(data?.detail ?? `Server error ${res.status}`);
       }
 
-      sessionIdRef.current = data.session_id;
-      applyServerState(data);
-      appendMessage("assistant", normalizeAssistantReply(data.reply, questionProgressRef));
-    } catch (err: any) {
-      appendMessage("assistant", `Warning: ${err.message}`);
+      sessionIdRef.current = data.session_id ?? null;
+      setSessionError(null);
+      applyServerState({
+        phase: data.phase ?? "INFO_PENDING",
+        is_closed: data.is_closed,
+        coding_round: data.coding_round,
+      });
+      appendMessage("assistant", normalizeAssistantReply(data.reply ?? "", questionProgressRef));
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      setSessionError(message);
+      appendMessage("assistant", `Warning: ${message}`);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [apiKey, provider]);
+
+  useEffect(() => {
+    if (provider && apiKey && apiKey.trim().length > 10) {
+      void initSession();
+    } else {
+      sessionIdRef.current = null;
+      setSessionError(null);
+      setIsClosed(false);
+      setPhase("INFO_PENDING");
+      setCodingRound(null);
+    }
+  }, [provider, apiKey, initSession]);
 
   const sendMessage = async (content: string) => {
     if (!content.trim() || isLoading || isClosed) return;
 
     if (!sessionIdRef.current) {
-      appendMessage("assistant", "Warning: Session not started yet. Please wait or re-enter your API key.");
+      const warning = "Session not started yet. Please wait or re-enter your API key.";
+      setSessionError(warning);
+      appendMessage("assistant", `Warning: ${warning}`);
       return;
     }
 
+    setSessionError(null);
     appendMessage("user", content);
     setIsLoading(true);
 
@@ -173,10 +225,67 @@ export function useTalentScout({
         throw new Error(data?.detail ?? `Server error ${res.status}`);
       }
 
-      appendMessage("assistant", normalizeAssistantReply(data.reply, questionProgressRef));
-      applyServerState(data);
-    } catch (err: any) {
-      appendMessage("assistant", `Warning: ${err.message}`);
+      appendMessage("assistant", normalizeAssistantReply(data.reply ?? "", questionProgressRef));
+      applyServerState({
+        phase: data.phase ?? "INFO_PENDING",
+        is_closed: data.is_closed,
+        coding_round: data.coding_round,
+      });
+    } catch (error: unknown) {
+      appendMessage("assistant", `Warning: ${getErrorMessage(error)}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const submitCandidateInfo = async (values: CandidateInfoFormValues) => {
+    if (isLoading || isClosed) return;
+
+    if (!sessionIdRef.current) {
+      const warning = "Session not started yet. Please wait or re-enter your API key.";
+      setSessionError(warning);
+      appendMessage("assistant", `Warning: ${warning}`);
+      return;
+    }
+
+    setSessionError(null);
+    setIsLoading(true);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/talentscout/candidate-info`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionIdRef.current,
+          provider,
+          api_key: apiKey,
+          name: values.name,
+          email: values.email,
+          phone: values.phone,
+          years_experience: values.yearsExperience,
+          desired_position: values.desiredPosition,
+          location: values.location,
+          tech_stack: values.techStack,
+        }),
+      });
+
+      const data = await safeJson(res);
+      if (!res.ok) {
+        throw new Error(data?.detail ?? `Server error ${res.status}`);
+      }
+
+      appendMessage("user", buildCandidateSummary(values));
+      appendMessage("assistant", normalizeAssistantReply(data.reply ?? "", questionProgressRef));
+      applyServerState({
+        phase: data.phase ?? "INFO_PENDING",
+        is_closed: data.is_closed,
+        coding_round: data.coding_round,
+      });
+      setSessionError(null);
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      setSessionError(message);
+      appendMessage("assistant", `Warning: ${message}`);
     } finally {
       setIsLoading(false);
     }
@@ -186,7 +295,9 @@ export function useTalentScout({
     if (!audioBlob || audioBlob.size === 0 || isLoading || isClosed) return;
 
     if (!sessionIdRef.current) {
-      appendMessage("assistant", "Warning: Session not started yet. Please wait or re-enter your API key.");
+      const warning = "Session not started yet. Please wait or re-enter your API key.";
+      setSessionError(warning);
+      appendMessage("assistant", `Warning: ${warning}`);
       return;
     }
 
@@ -195,6 +306,7 @@ export function useTalentScout({
       return;
     }
 
+    setSessionError(null);
     setIsLoading(true);
 
     try {
@@ -226,8 +338,13 @@ export function useTalentScout({
       if (data.transcript) {
         appendMessage("user", data.transcript);
       }
-      appendMessage("assistant", normalizeAssistantReply(data.reply, questionProgressRef));
-      applyServerState(data);
+      appendMessage("assistant", normalizeAssistantReply(data.reply ?? "", questionProgressRef));
+      applyServerState({
+        phase: data.phase ?? "INFO_PENDING",
+        is_closed: data.is_closed,
+        coding_round: data.coding_round,
+      });
+      setSessionError(null);
 
       if (data.audio_base64 && data.audio_mime_type) {
         const audio = new Audio(`data:${data.audio_mime_type};base64,${data.audio_base64}`);
@@ -235,8 +352,10 @@ export function useTalentScout({
           // Browser autoplay policy may block playback.
         });
       }
-    } catch (err: any) {
-      appendMessage("assistant", `Warning: ${err.message}`);
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      setSessionError(message);
+      appendMessage("assistant", `Warning: ${message}`);
     } finally {
       setIsLoading(false);
     }
@@ -246,10 +365,13 @@ export function useTalentScout({
     if (!file || isLoading || isClosed) return;
 
     if (!sessionIdRef.current) {
-      appendMessage("assistant", "Warning: Session not started yet. Please wait or re-enter your API key.");
+      const warning = "Session not started yet. Please wait or re-enter your API key.";
+      setSessionError(warning);
+      appendMessage("assistant", `Warning: ${warning}`);
       return;
     }
 
+    setSessionError(null);
     appendMessage("user", `Uploaded CV: ${file.name}`);
     setIsLoading(true);
 
@@ -270,10 +392,17 @@ export function useTalentScout({
         throw new Error(data?.detail ?? `Server error ${res.status}`);
       }
 
-      appendMessage("assistant", normalizeAssistantReply(data.reply, questionProgressRef));
-      applyServerState(data);
-    } catch (err: any) {
-      appendMessage("assistant", `Warning: ${err.message}`);
+      appendMessage("assistant", normalizeAssistantReply(data.reply ?? "", questionProgressRef));
+      applyServerState({
+        phase: data.phase ?? "INFO_PENDING",
+        is_closed: data.is_closed,
+        coding_round: data.coding_round,
+      });
+      setSessionError(null);
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      setSessionError(message);
+      appendMessage("assistant", `Warning: ${message}`);
     } finally {
       setIsLoading(false);
     }
@@ -290,6 +419,7 @@ export function useTalentScout({
   }) => {
     if (isLoading || !sessionIdRef.current || !codingRound) return;
 
+    setSessionError(null);
     setIsLoading(true);
     try {
       const data = await runCodingRoundRequest({
@@ -305,8 +435,10 @@ export function useTalentScout({
       if (data.reply) {
         appendMessage("assistant", data.reply);
       }
-    } catch (err: any) {
-      appendMessage("assistant", `Warning: ${err.message}`);
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      setSessionError(message);
+      appendMessage("assistant", `Warning: ${message}`);
     } finally {
       setIsLoading(false);
     }
@@ -315,6 +447,7 @@ export function useTalentScout({
   const startCodingRound = async () => {
     if (isLoading || !sessionIdRef.current || isClosed) return;
 
+    setSessionError(null);
     setIsLoading(true);
     try {
       const data = await startCodingRoundRequest(sessionIdRef.current);
@@ -322,8 +455,45 @@ export function useTalentScout({
       if (data.reply) {
         appendMessage("assistant", normalizeAssistantReply(data.reply, questionProgressRef));
       }
-    } catch (err: any) {
-      appendMessage("assistant", `Warning: ${err.message}`);
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      setSessionError(message);
+      appendMessage("assistant", `Warning: ${message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const stopSession = async () => {
+    if (isLoading || !sessionIdRef.current || isClosed) return;
+
+    setSessionError(null);
+    setIsLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/talentscout/stop`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionIdRef.current,
+        }),
+      });
+
+      const data = await safeJson(res);
+      if (!res.ok) {
+        throw new Error(data?.detail ?? `Server error ${res.status}`);
+      }
+
+      sessionIdRef.current = null;
+      setCodingRound(null);
+      setIsClosed(true);
+      setPhase(data.phase ?? "CLOSED");
+      if (data.reply) {
+        appendMessage("assistant", normalizeAssistantReply(data.reply, questionProgressRef));
+      }
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      setSessionError(message);
+      appendMessage("assistant", `Warning: ${message}`);
     } finally {
       setIsLoading(false);
     }
@@ -338,6 +508,7 @@ export function useTalentScout({
   }) => {
     if (isLoading || !sessionIdRef.current || !codingRound) return;
 
+    setSessionError(null);
     setIsLoading(true);
     try {
       const data = await submitCodingRoundRequest({
@@ -352,8 +523,10 @@ export function useTalentScout({
       if (data.reply) {
         appendMessage("assistant", data.reply);
       }
-    } catch (err: any) {
-      appendMessage("assistant", `Warning: ${err.message}`);
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      setSessionError(message);
+      appendMessage("assistant", `Warning: ${message}`);
     } finally {
       setIsLoading(false);
     }
@@ -383,9 +556,13 @@ export function useTalentScout({
     isClosed,
     phase,
     codingRound,
+    hasActiveSession: Boolean(sessionIdRef.current),
+    sessionError,
+    submitCandidateInfo,
     sendMessage,
     sendVoiceMessage,
     sendCvFile,
+    stopSession,
     startCodingRound,
     runCodingRound,
     submitCodingRound,

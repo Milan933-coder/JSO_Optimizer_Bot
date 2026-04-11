@@ -28,17 +28,19 @@ import os
 import argparse
 import traceback
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Any, Optional, TYPE_CHECKING
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-sys.path.append(os.path.dirname(__file__))
+sys.path.insert(0, os.path.dirname(__file__))
 
 from database.setup_db import setup_database, get_connection, DB_PATH
-from agents.orchestrator import HRAgent
+
+if TYPE_CHECKING:
+    from agents.orchestrator import HRAgent
 
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
@@ -84,13 +86,22 @@ class ResetResponse(BaseModel):
 
 # ── Agent singleton ───────────────────────────────────────────────────────────
 
-_agent: HRAgent = None
+_agent: Any = None
 
 
-def get_agent(hr_id: int = 1, hr_name: str = "HR Consultant") -> HRAgent:
+def _get_hr_agent_class():
+    from agents.orchestrator import HRAgent
+
+    return HRAgent
+
+
+def get_agent(hr_id: int = 1, hr_name: str = "HR Consultant", create: bool = False) -> Optional["HRAgent"]:
     global _agent
     if _agent is None:
-        _agent = HRAgent(hr_id=hr_id, hr_name=hr_name)
+        if not create:
+            return None
+        agent_class = _get_hr_agent_class()
+        _agent = agent_class(hr_id=hr_id, hr_name=hr_name)
     return _agent
 
 
@@ -100,8 +111,7 @@ def get_agent(hr_id: int = 1, hr_name: str = "HR Consultant") -> HRAgent:
 async def lifespan(app: FastAPI):
     print("\n🗄️  Checking database...")
     setup_database()
-    print("🤖 Pre-warming agent...")
-    get_agent()
+    print("Agent lazy-loading is enabled; the first /ask request will initialize the HR agent.")
     print("✅ Server ready.\n")
     yield
     print("\n👋 Server shutting down.")
@@ -180,7 +190,7 @@ def ask_agent(body: AskRequest):
     if not query:
         raise HTTPException(status_code=400, detail="Field 'query' must not be empty.")
 
-    agent = get_agent(hr_id=body.hr_id, hr_name=body.hr_name)
+    agent = get_agent(hr_id=body.hr_id, hr_name=body.hr_name, create=True)
 
     try:
         result = agent.ask(query)
@@ -230,7 +240,7 @@ def ask_agent(body: AskRequest):
 def reset_session():
     """Clears conversation history and starts a fresh agent session."""
     global _agent
-    _agent = HRAgent(hr_id=1, hr_name="HR Consultant")
+    _agent = None
     return ResetResponse(status="reset", message="Session cleared. Conversation history wiped.")
 
 

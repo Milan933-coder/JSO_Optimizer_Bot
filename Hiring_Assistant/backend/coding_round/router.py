@@ -17,6 +17,7 @@ from prompts.talentscout_prompts import (
     build_coding_round_timeout_message,
 )
 from services.conversation_manager import ConversationPhase, delete_session, get_or_create_session
+from services.interview_agents import append_final_assessment_to_reply
 
 router = APIRouter()
 
@@ -63,7 +64,10 @@ def _require_active_round(session):
 
 
 def _timeout_response(session, session_id: str, action: str) -> CodingRoundActionResponse:
-    reply = build_coding_round_timeout_message(session.candidate.to_dict())
+    reply = append_final_assessment_to_reply(
+        build_coding_round_timeout_message(session.candidate.to_dict()),
+        session.final_interview_assessment,
+    )
     result = _synthetic_result(action, "Coding round expired.", len((session.coding_round.problem or {}).get("samples", [])))
     session.finish_coding_round(status="expired", reason="coding_time_limit", close_session=True)
     session.add_message("assistant", reply)
@@ -73,7 +77,10 @@ def _timeout_response(session, session_id: str, action: str) -> CodingRoundActio
 
 
 def _attempt_limit_response(session, session_id: str, action: str, result: dict) -> CodingRoundActionResponse:
-    reply = build_coding_round_attempt_limit_message(session.candidate.to_dict())
+    reply = append_final_assessment_to_reply(
+        build_coding_round_attempt_limit_message(session.candidate.to_dict()),
+        session.final_interview_assessment,
+    )
     session.finish_coding_round(status="max_attempts_reached", reason="coding_max_attempts", close_session=True)
     session.add_message("assistant", reply)
     response = _build_action_response(session_id, session, action, result, reply=reply, is_closed=True)
@@ -82,10 +89,13 @@ def _attempt_limit_response(session, session_id: str, action: str, result: dict)
 
 
 def _completion_response(session, session_id: str, action: str, result: dict) -> CodingRoundActionResponse:
-    reply = build_coding_round_completion_message(
-        session.candidate.to_dict(),
-        result.get("passed_samples", 0),
-        result.get("total_samples", 0),
+    reply = append_final_assessment_to_reply(
+        build_coding_round_completion_message(
+            session.candidate.to_dict(),
+            result.get("passed_samples", 0),
+            result.get("total_samples", 0),
+        ),
+        session.final_interview_assessment,
     )
     session.finish_coding_round(status="accepted", reason="coding_completed", close_session=True)
     session.add_message("assistant", reply)

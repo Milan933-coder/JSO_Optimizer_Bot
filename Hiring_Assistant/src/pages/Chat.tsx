@@ -1,8 +1,19 @@
 import { useState } from "react";
 
 import { CodingRoundPanel } from "@/coding-round/CodingRoundPanel";
+import { CandidateInfoForm, type CandidateInfoFormValues } from "@/components/chat/CandidateInfoForm";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { ChatMessages } from "@/components/chat/ChatMessages";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,10 +22,10 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Provider, useTalentScout } from "@/hooks/useTalentScout";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import { Maximize2, MessageSquarePlus, Play, SlidersHorizontal } from "lucide-react";
+import { Maximize2, MessageSquarePlus, Play, Power, SlidersHorizontal } from "lucide-react";
 
 const PROVIDERS: { id: Provider; name: string; color: string; placeholder: string }[] = [
-  { id: "openai", name: "OpenAI GPT-4o Mini", color: "#10a37f", placeholder: "sk-..." },
+  { id: "openai", name: "OpenAI GPT-4o", color: "#10a37f", placeholder: "sk-..." },
   { id: "anthropic", name: "Anthropic Claude", color: "#d97706", placeholder: "sk-ant-..." },
   { id: "gemini", name: "Google Gemini", color: "#4285f4", placeholder: "AIza..." },
 ];
@@ -47,6 +58,7 @@ export default function Chat() {
   const [judge0ApiKey, setJudge0ApiKey] = useState("");
   const [judge0BaseUrl, setJudge0BaseUrl] = useState(DEFAULT_JUDGE0_BASE_URL);
   const [isSidebarSheetOpen, setIsSidebarSheetOpen] = useState(false);
+  const [isStopDialogOpen, setIsStopDialogOpen] = useState(false);
 
   const activeKey = apiKeys[provider];
   const activeProvider = PROVIDERS.find((item) => item.id === provider)!;
@@ -57,9 +69,13 @@ export default function Chat() {
     isClosed,
     phase,
     codingRound,
+    hasActiveSession,
+    sessionError,
+    submitCandidateInfo,
     sendMessage,
     sendVoiceMessage,
     sendCvFile,
+    stopSession,
     startCodingRound,
     runCodingRound,
     submitCodingRound,
@@ -151,7 +167,16 @@ export default function Chat() {
   };
 
   const phaseInfo = PHASE_LABELS[phase] ?? PHASE_LABELS.INFO_PENDING;
+  const candidateFormDisabledReason =
+    !activeKey
+      ? `Enter your ${activeProvider.name} API key first.`
+      : isLoading
+        ? "Connecting to the interview session..."
+        : !hasActiveSession
+          ? sessionError || "The interview session is not ready yet. Check the API key and backend connection."
+          : null;
   const chatInputDisabled = isLoading || isClosed || !activeKey || Boolean(codingRound?.is_active);
+  const canStopSession = Boolean(hasActiveSession && !isClosed && !isLoading);
   const canStartManualDsaRound = Boolean(
     activeKey && !isLoading && !isClosed && !codingRound && phase === "INTERVIEWING",
   );
@@ -171,6 +196,24 @@ export default function Chat() {
     try {
       await startCodingRound();
       setIsSidebarSheetOpen(false);
+    } catch (error: unknown) {
+      toast({ title: "Error", description: getErrorMessage(error), variant: "destructive" });
+    }
+  };
+
+  const handleSubmitCandidateInfo = async (values: CandidateInfoFormValues) => {
+    try {
+      await submitCandidateInfo(values);
+    } catch (error: unknown) {
+      toast({ title: "Error", description: getErrorMessage(error), variant: "destructive" });
+    }
+  };
+
+  const handleStopSession = async () => {
+    try {
+      await stopSession();
+      setIsSidebarSheetOpen(false);
+      setIsStopDialogOpen(false);
     } catch (error: unknown) {
       toast({ title: "Error", description: getErrorMessage(error), variant: "destructive" });
     }
@@ -366,15 +409,27 @@ export default function Chat() {
       </div>
 
       <div className="mt-4">
-        <Button
-          variant="outline"
-          className="w-full gap-2 border-white/15 bg-slate-950/60 text-slate-100 hover:bg-slate-900"
-          onClick={handleClearChat}
-          disabled={!activeKey}
-        >
-          <MessageSquarePlus className="h-4 w-4" />
-          New Interview
-        </Button>
+        <div className="grid gap-3">
+          <Button
+            variant="outline"
+            className="w-full gap-2 border-rose-400/25 bg-rose-500/10 text-rose-100 hover:bg-rose-500/20"
+            onClick={() => setIsStopDialogOpen(true)}
+            disabled={!canStopSession}
+          >
+            <Power className="h-4 w-4" />
+            Stop Session
+          </Button>
+
+          <Button
+            variant="outline"
+            className="w-full gap-2 border-white/15 bg-slate-950/60 text-slate-100 hover:bg-slate-900"
+            onClick={handleClearChat}
+            disabled={!activeKey}
+          >
+            <MessageSquarePlus className="h-4 w-4" />
+            New Interview
+          </Button>
+        </div>
       </div>
     </div>
   );
@@ -398,6 +453,18 @@ export default function Chat() {
           >
             <SlidersHorizontal className="h-4 w-4" />
             Controls
+          </Button>
+
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => setIsStopDialogOpen(true)}
+            className="gap-2 border-rose-400/30 bg-rose-500/10 text-rose-700 hover:bg-rose-500/20"
+            disabled={!canStopSession}
+          >
+            <Power className="h-4 w-4" />
+            Stop Session
           </Button>
 
           {canStartManualDsaRound && (
@@ -437,14 +504,28 @@ export default function Chat() {
         </div>
       )}
 
-      {(activeKey || messages.length > 0) && <ChatMessages messages={messages} isLoading={isLoading} />}
+      {phase === "INFO_PENDING" && activeKey && (
+        <div className="flex-1 overflow-y-auto">
+          <CandidateInfoForm
+            isLoading={isLoading}
+            submitDisabledReason={candidateFormDisabledReason}
+            onSubmit={handleSubmitCandidateInfo}
+          />
+        </div>
+      )}
 
-      <ChatInput
-        onSend={handleSend}
-        onSendVoice={handleSendVoice}
-        onSendCv={handleSendCv}
-        disabled={chatInputDisabled}
-      />
+      {phase !== "INFO_PENDING" && (activeKey || messages.length > 0) && (
+        <ChatMessages messages={messages} isLoading={isLoading} />
+      )}
+
+      {phase !== "INFO_PENDING" && (
+        <ChatInput
+          onSend={handleSend}
+          onSendVoice={handleSendVoice}
+          onSendCv={handleSendCv}
+          disabled={chatInputDisabled}
+        />
+      )}
 
       {isClosed && (
         <div className="border-t border-border/20 bg-muted/30 px-6 py-2 text-center text-xs text-muted-foreground">
@@ -477,6 +558,18 @@ export default function Chat() {
               Controls
             </Button>
 
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => setIsStopDialogOpen(true)}
+              className="gap-2 border-rose-400/30 bg-rose-500/10 text-rose-700 hover:bg-rose-500/20"
+              disabled={!canStopSession}
+            >
+              <Power className="h-4 w-4" />
+              Stop Session
+            </Button>
+
             <span className="text-xs text-amber-700">
               Coding workspace live - interview chat is paused while the timer runs
             </span>
@@ -496,33 +589,54 @@ export default function Chat() {
   const renderMainContent = () => (codingRound ? renderCodingWorkspace() : renderInterviewContent());
 
   return (
-    <Sheet open={isSidebarSheetOpen} onOpenChange={setIsSidebarSheetOpen}>
-      <div className="min-h-screen bg-background text-foreground xl:h-screen">
-        <div className="xl:hidden">{renderMainContent()}</div>
+    <AlertDialog open={isStopDialogOpen} onOpenChange={setIsStopDialogOpen}>
+      <Sheet open={isSidebarSheetOpen} onOpenChange={setIsSidebarSheetOpen}>
+        <div className="min-h-screen bg-background text-foreground xl:h-screen">
+          <div className="xl:hidden">{renderMainContent()}</div>
 
-        <div className="hidden h-full xl:block">
-          <ResizablePanelGroup direction="horizontal" className="bg-background">
-            <ResizablePanel defaultSize={23} minSize={18} maxSize={38}>
-              {renderSidebarContent("panel")}
-            </ResizablePanel>
+          <div className="hidden h-full xl:block">
+            <ResizablePanelGroup direction="horizontal" className="bg-background">
+              <ResizablePanel defaultSize={23} minSize={18} maxSize={38}>
+                {renderSidebarContent("panel")}
+              </ResizablePanel>
 
-            <ResizableHandle withHandle className="bg-border/20" />
+              <ResizableHandle withHandle className="bg-border/20" />
 
-            <ResizablePanel defaultSize={77}>{renderMainContent()}</ResizablePanel>
-          </ResizablePanelGroup>
+              <ResizablePanel defaultSize={77}>{renderMainContent()}</ResizablePanel>
+            </ResizablePanelGroup>
+          </div>
         </div>
-      </div>
 
-      <SheetContent
-        side="left"
-        className="w-full border-0 bg-transparent p-0 text-slate-100 sm:max-w-none"
-      >
-        <SheetHeader className="sr-only">
-          <SheetTitle>TalentScout Controls</SheetTitle>
-          <SheetDescription>Expanded sidebar controls for provider settings and DSA round actions.</SheetDescription>
-        </SheetHeader>
-        {renderSidebarContent("sheet")}
-      </SheetContent>
-    </Sheet>
+        <SheetContent
+          side="left"
+          className="w-full border-0 bg-transparent p-0 text-slate-100 sm:max-w-none"
+        >
+          <SheetHeader className="sr-only">
+            <SheetTitle>TalentScout Controls</SheetTitle>
+            <SheetDescription>Expanded sidebar controls for provider settings and DSA round actions.</SheetDescription>
+          </SheetHeader>
+          {renderSidebarContent("sheet")}
+        </SheetContent>
+      </Sheet>
+
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Stop this session?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This will close the current interview immediately. Typed messages will no longer stop the session, so use
+            this button only when you really want to end it.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep Interviewing</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={() => void handleStopSession()}
+            className="bg-rose-600 text-white hover:bg-rose-500"
+          >
+            Stop Session
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

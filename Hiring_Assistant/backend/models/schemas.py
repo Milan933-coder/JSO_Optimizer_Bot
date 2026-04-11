@@ -130,6 +130,38 @@ class MessageResponse(BaseModel):
     coding_round: Optional[CodingRoundPayload] = None
 
 
+class CandidateInfoRequest(BaseModel):
+    session_id: str
+    provider: SUPPORTED_PROVIDERS
+    api_key: str
+    name: str
+    email: str
+    phone: str
+    years_experience: str
+    desired_position: str
+    location: str
+    tech_stack: str
+
+    @field_validator(
+        "name",
+        "email",
+        "phone",
+        "years_experience",
+        "desired_position",
+        "location",
+        "tech_stack",
+    )
+    @classmethod
+    def required_field_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("All candidate fields are required.")
+        return v.strip()
+
+
+class StopSessionRequest(BaseModel):
+    session_id: str
+
+
 class VoiceMessageResponse(BaseModel):
     session_id:         str
     transcript:         str

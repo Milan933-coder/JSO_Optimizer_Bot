@@ -18,7 +18,7 @@ Also handles:
 import sys
 import os
 
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from utils.config import GOOGLE_API_KEY, GEMINI_MODEL, GEMINI_MAX_TOKENS, TOP_K_RESULTS
 from utils.embeddings import (
     search_by_job_description,

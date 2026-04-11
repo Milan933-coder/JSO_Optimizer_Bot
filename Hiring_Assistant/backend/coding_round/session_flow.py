@@ -9,6 +9,7 @@ from prompts.talentscout_prompts import (
     build_closing_message,
     build_coding_round_intro,
 )
+from services.interview_agents import append_final_assessment_to_reply
 
 
 CODING_ROUND_START_KEYWORDS = (
@@ -32,7 +33,10 @@ async def start_coding_round_for_session(session, acknowledgement: str) -> tuple
     try:
         coding_problem = await fetch_random_medium_problem()
     except Exception:
-        closing = build_closing_message(session.candidate.to_dict())
+        closing = append_final_assessment_to_reply(
+            build_closing_message(session.candidate.to_dict()),
+            session.final_interview_assessment,
+        )
         fallback = "I wasn't able to load the coding round right now, so I'll wrap up the interview here."
         final_reply = "\n\n".join(part for part in [acknowledgement.strip(), fallback, closing] if part)
         session.close("completed")

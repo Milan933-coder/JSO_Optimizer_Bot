@@ -16,7 +16,7 @@ import json
 import sys
 import os
 
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from utils.config import GOOGLE_API_KEY, GEMINI_MODEL, GEMINI_MAX_TOKENS
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage

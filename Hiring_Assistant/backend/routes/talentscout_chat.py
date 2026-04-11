@@ -14,39 +14,39 @@ from coding_round.session_flow import (
     start_coding_round_for_session,
 )
 from models.schemas import (
+    CandidateInfoRequest,
     CVIntakeResponse,
     MessageRequest,
     MessageResponse,
+    StopSessionRequest,
     StartRequest,
     StartResponse,
     VoiceMessageResponse,
 )
 from prompts.talentscout_prompts import (
     GREETING_MESSAGE,
-    INFO_COLLECTION_SYSTEM_PROMPT,
     INFO_NOT_PROVIDED_RESPONSE,
     SESSION_TERMINATED_MESSAGE,
     VOLUNTARY_EXIT_MESSAGE,
     build_closing_message,
     build_coding_round_reminder,
     build_coding_round_timeout_message,
+    build_deviation_warning,
     build_interview_opener,
-    build_interview_system_prompt,
-    build_question_generation_prompt,
-    is_exit_intent,
 )
-from services.ai_service import (
-    chat_completion,
-    extract_text_from_pdf_bytes,
-    json_completion,
-    summarize_cv_text_with_model,
-    synthesize_speech_elevenlabs,
-    transcribe_audio_whisper,
-)
+from services.ai_service import chat_completion, extract_text_from_pdf_bytes, summarize_cv_text_with_model, synthesize_speech_elevenlabs, transcribe_audio_whisper
 from services.conversation_manager import (
     ConversationPhase,
     delete_session,
     get_or_create_session,
+)
+from services.interview_agents import (
+    append_final_assessment_to_reply,
+    format_final_assessment_markdown,
+    format_question_review_markdown,
+    generate_interview_questions,
+    review_interview_answer,
+    summarize_interview_assessment,
 )
 from services.recommendation_service import (
     generate_recommendations_from_github,
@@ -87,19 +87,6 @@ async def start_session(request: StartRequest):
         coding_round=None,
     )
 
-
-def _strip_llm_question(text: str) -> str:
-    import re
-
-    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
-    filtered = [sentence for sentence in sentences if not sentence.strip().endswith("?")]
-
-    if not filtered:
-        filtered = [sentences[0]] if sentences else ["Good answer!"]
-
-    return " ".join(filtered).strip()
-
-
 def _build_message_response(session_id: str, session, reply: str, is_closed: bool | None = None) -> MessageResponse:
     return MessageResponse(
         session_id=session_id,
@@ -136,6 +123,113 @@ async def _start_coding_round(session, session_id: str, acknowledgement: str) ->
     return response
 
 
+def _stop_session(session_id: str, session, reply: str) -> MessageResponse:
+    if session.phase == ConversationPhase.CODING_ROUND and session.coding_round.problem and not session.coding_round.completed:
+        session.finish_coding_round(
+            status="stopped",
+            reason="manual_stop",
+            close_session=False,
+        )
+
+    session.close("manual_stop")
+    session.add_message("assistant", reply)
+    response = MessageResponse(
+        session_id=session_id,
+        reply=reply,
+        phase=session.phase.value,
+        is_closed=True,
+        coding_round=None,
+    )
+    delete_session(session_id)
+    return response
+
+
+def _candidate_summary_text(candidate_info: dict) -> str:
+    return (
+        "Candidate profile submitted via form:\n"
+        f"- Full Name: {candidate_info.get('name', '')}\n"
+        f"- Email Address: {candidate_info.get('email', '')}\n"
+        f"- Phone Number: {candidate_info.get('phone', '')}\n"
+        f"- Years of Experience: {candidate_info.get('years_experience', '')}\n"
+        f"- Desired Position(s): {candidate_info.get('desired_position', '')}\n"
+        f"- Current Location: {candidate_info.get('location', '')}\n"
+        f"- Tech Stack: {candidate_info.get('tech_stack', '')}"
+    )
+
+
+async def _prepare_interview_from_candidate_info(session, provider: str, api_key: str) -> str:
+    session.enable_info_token()
+
+    try:
+        questions = await generate_interview_questions(
+            provider=provider,
+            api_key=api_key,
+            candidate_info=session.candidate.to_dict(),
+        )
+        session.start_interview(questions)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Question generation failed: {exc}") from exc
+
+    opener = build_interview_opener(session.candidate.to_dict())
+    first_question = session.get_current_question()
+    first_question_text = f"\n\n{first_question.question}" if first_question else ""
+    return f"{opener}{first_question_text}"
+
+
+@router.post("/candidate-info", response_model=MessageResponse)
+async def submit_candidate_info(request: CandidateInfoRequest):
+    session = get_or_create_session(request.session_id)
+
+    if session.phase == ConversationPhase.CLOSED:
+        return MessageResponse(
+            session_id=request.session_id,
+            reply="This session has ended. Please start a new session.",
+            phase=session.phase.value,
+            is_closed=True,
+            coding_round=serialize_coding_round(session),
+        )
+
+    if session.phase != ConversationPhase.INFO_PENDING:
+        raise HTTPException(status_code=409, detail="Candidate details have already been submitted for this session.")
+
+    _populate_candidate(
+        session,
+        {
+            "name": request.name,
+            "email": request.email,
+            "phone": request.phone,
+            "years_experience": request.years_experience,
+            "desired_position": request.desired_position,
+            "location": request.location,
+            "tech_stack": request.tech_stack,
+        },
+    )
+
+    if not session.candidate.is_complete():
+        raise HTTPException(status_code=422, detail="All candidate fields are required.")
+
+    session.add_message("user", _candidate_summary_text(session.candidate.to_dict()))
+    final_reply = await _prepare_interview_from_candidate_info(session, request.provider, request.api_key)
+    session.add_message("assistant", final_reply)
+    return _build_message_response(request.session_id, session, final_reply)
+
+
+@router.post("/stop", response_model=MessageResponse)
+async def stop_session(request: StopSessionRequest):
+    session = get_or_create_session(request.session_id)
+
+    if session.phase == ConversationPhase.CLOSED:
+        return MessageResponse(
+            session_id=request.session_id,
+            reply="This session has already ended. Please start a new session if you want to continue.",
+            phase=session.phase.value,
+            is_closed=True,
+            coding_round=None,
+        )
+
+    return _stop_session(request.session_id, session, VOLUNTARY_EXIT_MESSAGE)
+
+
 @router.post("/message", response_model=MessageResponse)
 async def chat(request: MessageRequest):
     session = get_or_create_session(request.session_id)
@@ -151,14 +245,6 @@ async def chat(request: MessageRequest):
             is_closed=True,
             coding_round=serialize_coding_round(session),
         )
-
-    if is_exit_intent(user_msg):
-        session.close("voluntary_exit")
-        session.add_message("user", user_msg)
-        session.add_message("assistant", VOLUNTARY_EXIT_MESSAGE)
-        response = _build_message_response(request.session_id, session, VOLUNTARY_EXIT_MESSAGE, is_closed=True)
-        delete_session(request.session_id)
-        return response
 
     if is_start_coding_round_intent(user_msg):
         session.add_message("user", user_msg)
@@ -216,63 +302,17 @@ async def chat(request: MessageRequest):
     session.add_message("user", user_msg)
 
     if session.phase == ConversationPhase.INFO_PENDING:
-        try:
-            raw_reply, _ = await chat_completion(
-                provider=provider,
-                api_key=api_key,
-                system_prompt=INFO_COLLECTION_SYSTEM_PROMPT,
-                messages=session.get_history(),
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-        markers = session.parse_markers(raw_reply)
-        clean_reply = session.strip_markers(raw_reply)
-
-        if markers["info_token_enabled"]:
-            session.enable_info_token()
-
-            try:
-                info_dict = await json_completion(
-                    provider=provider,
-                    api_key=api_key,
-                    system_prompt=_EXTRACTION_PROMPT,
-                    user_message="Extract the candidate info from the conversation above: "
-                    + str(session.get_history()),
-                )
-                _populate_candidate(session, info_dict)
-            except Exception:
-                pass
-
-            try:
-                question_payload = await json_completion(
-                    provider=provider,
-                    api_key=api_key,
-                    system_prompt=build_question_generation_prompt(
-                        tech_stack=session.candidate.tech_stack or "general software",
-                        experience_years=session.candidate.years_experience or "unknown",
-                        position=session.candidate.desired_position or "tech role",
-                    ),
-                    user_message="Generate the interview questions now.",
-                )
-                session.start_interview(question_payload.get("questions", []))
-            except Exception as exc:
-                raise HTTPException(status_code=500, detail=f"Question generation failed: {exc}") from exc
-
-            opener = build_interview_opener(session.candidate.to_dict())
-            first_question = session.get_current_question()
-            first_question_text = f"\n\n{first_question.question}" if first_question else ""
-            final_reply = f"{clean_reply}\n\n{opener}{first_question_text}"
-        else:
-            final_reply = clean_reply if len(user_msg) >= 5 else INFO_NOT_PROVIDED_RESPONSE
-
+        final_reply = INFO_NOT_PROVIDED_RESPONSE
         session.add_message("assistant", final_reply)
         return _build_message_response(request.session_id, session, final_reply)
 
     if session.phase == ConversationPhase.INTERVIEWING:
         current_question = session.get_current_question()
         if not current_question:
-            closing = build_closing_message(session.candidate.to_dict())
+            closing = append_final_assessment_to_reply(
+                build_closing_message(session.candidate.to_dict()),
+                session.final_interview_assessment,
+            )
             session.close("completed")
             session.add_message("assistant", closing)
             response = _build_message_response(request.session_id, session, closing, is_closed=True)
@@ -280,24 +320,18 @@ async def chat(request: MessageRequest):
             return response
 
         try:
-            raw_reply, _ = await chat_completion(
+            review_payload = await review_interview_answer(
                 provider=provider,
                 api_key=api_key,
-                system_prompt=build_interview_system_prompt(
-                    candidate_info=session.candidate.to_dict(),
-                    deviation_count=session.deviation_count,
-                ),
-                messages=session.get_history(),
+                question=current_question,
+                answer=user_msg,
             )
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-        markers = session.parse_markers(raw_reply)
-        clean_reply = session.strip_markers(raw_reply)
-
-        if markers["deviation_count"] is not None:
-            session.record_deviation()
-            if session.is_deviation_limit_reached() or markers["session_terminated"]:
+        if review_payload.get("is_deviation") or not review_payload.get("answered_question"):
+            deviation_number = session.record_deviation()
+            if session.is_deviation_limit_reached():
                 session.close("deviation_limit")
                 session.add_message("assistant", SESSION_TERMINATED_MESSAGE)
                 response = _build_message_response(
@@ -309,19 +343,38 @@ async def chat(request: MessageRequest):
                 delete_session(request.session_id)
                 return response
 
-            session.add_message("assistant", clean_reply)
-            return _build_message_response(request.session_id, session, clean_reply)
+            warning = review_payload.get("redirect_message", "").strip() or build_deviation_warning(
+                deviation_number,
+                current_question.question,
+            )
+            session.add_message("assistant", warning)
+            return _build_message_response(request.session_id, session, warning)
 
+        answer_review = session.record_answer_review(user_msg, review_payload)
         session.advance_question()
         next_question = session.get_current_question()
-        clean_reply = _strip_llm_question(clean_reply)
+        review_reply = format_question_review_markdown(answer_review) if answer_review else "Thanks for the answer."
 
         if next_question:
-            final_reply = f"{clean_reply}\n\n---\n{next_question.question}"
+            final_reply = f"{review_reply}\n\n---\n{next_question.question}"
             session.add_message("assistant", final_reply)
             return _build_message_response(request.session_id, session, final_reply)
 
-        return await _start_coding_round(session, request.session_id, clean_reply)
+        final_assessment_text = ""
+        try:
+            final_assessment_payload = await summarize_interview_assessment(
+                provider=provider,
+                api_key=api_key,
+                candidate_info=session.candidate.to_dict(),
+                questions=session.questions,
+            )
+            session.set_final_interview_assessment(final_assessment_payload)
+            final_assessment_text = format_final_assessment_markdown(session.final_interview_assessment)
+        except Exception:
+            final_assessment_text = ""
+
+        acknowledgement = "\n\n".join(part for part in [review_reply, final_assessment_text] if part)
+        return await _start_coding_round(session, request.session_id, acknowledgement)
 
     raise HTTPException(status_code=500, detail="Unknown session state")
 
@@ -455,22 +508,6 @@ async def cv_intake(
         is_closed=chat_response.is_closed,
         coding_round=chat_response.coding_round,
     )
-
-
-_EXTRACTION_PROMPT = """
-You are a data extractor. Read the conversation and extract candidate information.
-Respond ONLY in this exact JSON format - use null for any field not found:
-{
-  "name":             "<string or null>",
-  "email":            "<string or null>",
-  "phone":            "<string or null>",
-  "years_experience": "<string or null>",
-  "desired_position": "<string or null>",
-  "location":         "<string or null>",
-  "tech_stack":       "<comma-separated technologies or null>"
-}
-"""
-
 
 def _populate_candidate(session, info: dict):
     candidate = session.candidate

@@ -20,6 +20,7 @@ import type { CodingRoundState } from "@/coding-round/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import {
   Select,
   SelectContent,
@@ -112,6 +113,8 @@ export function CodingRoundPanel({
   const [selectedSampleIndex, setSelectedSampleIndex] = useState(0);
   const [remainingSeconds, setRemainingSeconds] = useState(codingRound.remaining_seconds);
   const [sourceByLanguage, setSourceByLanguage] = useState<Record<string, string>>({});
+  const [hasOpenedResultPanel, setHasOpenedResultPanel] = useState(Boolean(codingRound.last_result));
+  const [pendingAction, setPendingAction] = useState<"run" | "submit" | null>(null);
 
   useEffect(() => {
     const initialLanguage = (availableLanguages[0]?.slug ?? "python") as "python" | "cpp" | "java" | "javascript";
@@ -121,11 +124,20 @@ export function CodingRoundPanel({
     setSelectedLanguage(initialLanguage);
     setSelectedSampleIndex(0);
     setSourceByLanguage(initialSources);
+    setHasOpenedResultPanel(Boolean(codingRound.last_result));
+    setPendingAction(null);
   }, [roundKey, availableLanguages]);
 
   useEffect(() => {
     setRemainingSeconds(codingRound.remaining_seconds);
   }, [codingRound.remaining_seconds]);
+
+  useEffect(() => {
+    if (codingRound.last_result) {
+      setHasOpenedResultPanel(true);
+      setPendingAction(null);
+    }
+  }, [codingRound.last_result]);
 
   useEffect(() => {
     if (!codingRound.is_active) return;
@@ -138,6 +150,7 @@ export function CodingRoundPanel({
   const activeCode = sourceByLanguage[selectedLanguage] ?? "";
   const latestResult = codingRound.last_result ?? null;
   const isLocked = !codingRound.is_active || codingRound.attempts_left <= 0;
+  const shouldShowResultPanel = hasOpenedResultPanel || Boolean(latestResult) || Boolean(pendingAction);
 
   const ratingVariant = codingRound.problem.rating >= 1400 ? "default" : "secondary";
   const statusVariant = useMemo(() => {
@@ -154,19 +167,243 @@ export function CodingRoundPanel({
   };
 
   const handleRun = async () => {
-    await onRun({
-      sourceCode: activeCode,
-      languageSlug: selectedLanguage,
-      sampleIndex: selectedSampleIndex,
-    });
+    if (isBusy || isLocked) return;
+    setHasOpenedResultPanel(true);
+    setPendingAction("run");
+    try {
+      await onRun({
+        sourceCode: activeCode,
+        languageSlug: selectedLanguage,
+        sampleIndex: selectedSampleIndex,
+      });
+    } finally {
+      setPendingAction(null);
+    }
   };
 
   const handleSubmit = async () => {
-    await onSubmit({
-      sourceCode: activeCode,
-      languageSlug: selectedLanguage,
-    });
+    if (isBusy || isLocked) return;
+    setHasOpenedResultPanel(true);
+    setPendingAction("submit");
+    try {
+      await onSubmit({
+        sourceCode: activeCode,
+        languageSlug: selectedLanguage,
+      });
+    } finally {
+      setPendingAction(null);
+    }
   };
+
+  const handleEditorKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Enter" || (!event.ctrlKey && !event.metaKey)) return;
+    event.preventDefault();
+    if (event.shiftKey) {
+      void handleSubmit();
+      return;
+    }
+    void handleRun();
+  };
+
+  const renderActionBar = () => (
+    <div className="flex flex-wrap items-center gap-3 rounded-[1.4rem] border border-white/10 bg-white/5 p-3">
+      <Button
+        type="button"
+        onClick={() => void handleRun()}
+        disabled={isBusy || isLocked}
+        className="bg-sky-500 text-slate-950 hover:bg-sky-400"
+      >
+        {isBusy && pendingAction === "run" ? (
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        ) : (
+          <Play className="mr-2 h-4 w-4" />
+        )}
+        Run Sample
+      </Button>
+      <Button
+        type="button"
+        onClick={() => void handleSubmit()}
+        disabled={isBusy || isLocked}
+        className="bg-emerald-400 text-slate-950 hover:bg-emerald-300"
+      >
+        {isBusy && pendingAction === "submit" ? (
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        ) : (
+          <Send className="mr-2 h-4 w-4" />
+        )}
+        Submit Samples
+      </Button>
+      <div className="ml-auto text-xs leading-5 text-slate-400">
+        <p>Ctrl/Cmd + Enter runs the selected sample.</p>
+        <p>Ctrl/Cmd + Shift + Enter submits all retrieved samples.</p>
+      </div>
+    </div>
+  );
+
+  const renderEditorSurface = () => (
+    <div className="flex h-full min-h-0 flex-col gap-4 p-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <div>
+          <CardTitle className="text-xl text-slate-50">Workspace</CardTitle>
+          <p className="mt-1 text-sm text-slate-400">
+            Write your solution, pick a sample, and open results only when you are ready.
+          </p>
+        </div>
+
+        <div className="ml-auto flex min-w-[240px] items-center gap-3">
+          <Badge variant="outline" className="border-slate-700 bg-slate-900/70 text-slate-200">
+            Sample {selectedSampleIndex + 1}
+          </Badge>
+          <Select
+            value={selectedLanguage}
+            onValueChange={(value) => setSelectedLanguage(value as "python" | "cpp" | "java" | "javascript")}
+          >
+            <SelectTrigger className="border-slate-700 bg-slate-900/80 text-slate-100">
+              <SelectValue placeholder="Language" />
+            </SelectTrigger>
+            <SelectContent>
+              {availableLanguages.map((language) => (
+                <SelectItem key={language.slug} value={language.slug}>
+                  {language.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      <div className="grid gap-3 rounded-[1.4rem] border border-white/10 bg-slate-900/45 p-3 sm:grid-cols-2">
+        <div className="rounded-[1.2rem] border border-white/10 bg-slate-950/80 p-3">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Selected Input</p>
+          <pre className="max-h-28 overflow-auto whitespace-pre-wrap font-mono text-xs leading-6 text-slate-200">
+            {displayValue(codingRound.problem.samples[selectedSampleIndex]?.input)}
+          </pre>
+        </div>
+        <div className="rounded-[1.2rem] border border-white/10 bg-slate-950/80 p-3">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Expected Output</p>
+          <pre className="max-h-28 overflow-auto whitespace-pre-wrap font-mono text-xs leading-6 text-emerald-200">
+            {displayValue(codingRound.problem.samples[selectedSampleIndex]?.output)}
+          </pre>
+        </div>
+      </div>
+
+      <div className="flex min-h-0 flex-1 flex-col rounded-[1.6rem] border border-slate-800 bg-slate-950/92 p-1 shadow-inner shadow-slate-950/40">
+        <Textarea
+          value={activeCode}
+          onChange={(event) => updateCode(event.target.value)}
+          onKeyDown={handleEditorKeyDown}
+          disabled={isBusy || isLocked}
+          className="min-h-[340px] flex-1 resize-none border-0 bg-transparent px-4 py-4 font-mono text-sm leading-7 text-slate-100 placeholder:text-slate-500 focus-visible:ring-0 focus-visible:ring-offset-0"
+          placeholder="Write your solution here."
+        />
+      </div>
+
+      {renderActionBar()}
+
+      {!shouldShowResultPanel && (
+        <div className="rounded-[1.4rem] border border-dashed border-slate-700 bg-slate-900/35 px-4 py-3 text-sm leading-6 text-slate-300">
+          The result console stays hidden until you run or submit. On desktop, you can drag the divider after it opens.
+        </div>
+      )}
+    </div>
+  );
+
+  const renderResultSurface = () => (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="border-b border-slate-800/70 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="rounded-full bg-slate-900/80 p-2 text-slate-200">
+            <TerminalSquare className="h-4 w-4" />
+          </div>
+          <div>
+            <h3 className="text-base font-semibold text-slate-50">Execution Console</h3>
+            <p className="text-xs text-slate-400">Drag the handle to resize this panel after you run or submit.</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        {isBusy && pendingAction && (
+          <div className="mb-4 flex items-center gap-3 rounded-[1.3rem] border border-sky-400/20 bg-sky-400/10 px-4 py-3 text-sm text-sky-100">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            {pendingAction === "submit"
+              ? "Submitting the retrieved samples to Judge0..."
+              : "Running the selected sample with Judge0..."}
+          </div>
+        )}
+
+        {latestResult ? (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge
+                variant={latestResult.passed ? "default" : "destructive"}
+                className={latestResult.passed ? "bg-emerald-400 text-slate-950 hover:bg-emerald-400" : ""}
+              >
+                {latestResult.passed ? (
+                  <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
+                ) : (
+                  <XCircle className="mr-1 h-3.5 w-3.5" />
+                )}
+                {latestResult.verdict}
+              </Badge>
+              <Badge variant="outline" className="border-slate-700 bg-slate-900/60 text-slate-100">
+                {latestResult.mode === "submit" ? "Final submit" : "Run sample"}
+              </Badge>
+              <span className="text-xs text-slate-400">
+                Passed {latestResult.passed_samples}/{latestResult.total_samples} checked sample(s)
+              </span>
+            </div>
+
+            {latestResult.sample_results.map((sampleResult, index) => (
+              <Card
+                key={`${sampleResult.sample_index}-${index}`}
+                className="border-slate-800 bg-slate-900/60 text-slate-100"
+              >
+                <CardHeader className="pb-3">
+                  <div className="flex items-center gap-2">
+                    {sampleResult.passed ? (
+                      <CheckCircle2 className="h-4 w-4 text-emerald-300" />
+                    ) : (
+                      <XCircle className="h-4 w-4 text-rose-300" />
+                    )}
+                    <CardTitle className="text-sm">Example {sampleResult.sample_index + 1}</CardTitle>
+                    <span className="ml-auto text-xs text-slate-400">{sampleResult.judge0_status}</span>
+                  </div>
+                </CardHeader>
+                <CardContent className="grid gap-3 lg:grid-cols-2">
+                  <div>
+                    <p className="mb-2 text-xs uppercase tracking-[0.16em] text-slate-400">Expected</p>
+                    <pre className="overflow-x-auto whitespace-pre-wrap rounded-2xl bg-slate-950/85 p-4 font-mono text-xs leading-6 text-emerald-200">
+                      {displayValue(sampleResult.expected_output)}
+                    </pre>
+                  </div>
+                  <div>
+                    <p className="mb-2 text-xs uppercase tracking-[0.16em] text-slate-400">Actual</p>
+                    <pre className="overflow-x-auto whitespace-pre-wrap rounded-2xl bg-slate-950/85 p-4 font-mono text-xs leading-6 text-slate-100">
+                      {displayValue(sampleResult.actual_output)}
+                    </pre>
+                  </div>
+
+                  {(sampleResult.stderr || sampleResult.compile_output || sampleResult.message) && (
+                    <div className="lg:col-span-2">
+                      <p className="mb-2 text-xs uppercase tracking-[0.16em] text-slate-400">Diagnostics</p>
+                      <pre className="overflow-x-auto whitespace-pre-wrap rounded-2xl bg-rose-950/40 p-4 font-mono text-xs leading-6 text-rose-100">
+                        {displayValue(sampleResult.compile_output || sampleResult.stderr || sampleResult.message)}
+                      </pre>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-[1.4rem] border border-dashed border-slate-700 bg-slate-900/45 px-4 py-3 text-sm leading-6 text-slate-300">
+            Run a sample or submit to load the Judge0 output here.
+          </div>
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <section className="flex min-h-0 w-full flex-1 flex-col overflow-hidden border-t border-border/20 bg-[radial-gradient(circle_at_top,#1f2937,transparent_46%),linear-gradient(180deg,rgba(15,23,42,0.985),rgba(2,6,23,0.96))] text-slate-100">
@@ -218,7 +455,7 @@ export function CodingRoundPanel({
         </div>
       </div>
 
-      <div className="grid min-h-0 flex-1 gap-4 p-4 lg:grid-cols-[minmax(340px,0.92fr)_minmax(420px,1.08fr)] lg:overflow-hidden sm:p-6">
+      <div className="grid min-h-0 flex-1 gap-5 p-4 lg:grid-cols-[minmax(340px,0.88fr)_minmax(480px,1.12fr)] lg:overflow-hidden sm:p-6">
         <Card className="min-h-0 border-slate-800/80 bg-slate-950/65 text-slate-100 shadow-2xl shadow-slate-950/30 lg:flex lg:flex-col">
           <CardHeader className="border-b border-slate-800/70 pb-4">
             <div className="flex items-center gap-3">
@@ -315,153 +552,32 @@ export function CodingRoundPanel({
           </CardContent>
         </Card>
 
-        <div className="flex min-h-0 flex-col gap-4">
-          <Card className="border-slate-800/80 bg-slate-950/65 text-slate-100 shadow-2xl shadow-slate-950/30 lg:flex lg:min-h-0 lg:flex-1 lg:flex-col">
-            <CardHeader className="border-b border-slate-800/70 pb-4">
-              <div className="flex flex-wrap items-center gap-3">
-                <div>
-                  <CardTitle className="text-xl text-slate-50">Code Editor</CardTitle>
-                  <p className="mt-1 text-sm text-slate-400">Write your solution here and run the retrieved examples.</p>
+        <Card className="min-h-0 border-slate-800/80 bg-slate-950/65 text-slate-100 shadow-2xl shadow-slate-950/30 lg:flex lg:flex-col">
+          <CardContent className="flex min-h-0 flex-1 flex-col p-0">
+            {shouldShowResultPanel ? (
+              <>
+                <div className="lg:hidden">
+                  {renderEditorSurface()}
+                  <div className="border-t border-slate-800/70">{renderResultSurface()}</div>
                 </div>
 
-                <div className="ml-auto min-w-[220px]">
-                  <Select
-                    value={selectedLanguage}
-                    onValueChange={(value) => setSelectedLanguage(value as "python" | "cpp" | "java" | "javascript")}
-                  >
-                    <SelectTrigger className="border-slate-700 bg-slate-900/80 text-slate-100">
-                      <SelectValue placeholder="Language" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableLanguages.map((language) => (
-                        <SelectItem key={language.slug} value={language.slug}>
-                          {language.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                <div className="hidden min-h-0 flex-1 lg:flex">
+                  <ResizablePanelGroup direction="vertical" className="min-h-0 flex-1">
+                    <ResizablePanel defaultSize={62} minSize={42}>
+                      {renderEditorSurface()}
+                    </ResizablePanel>
+                    <ResizableHandle withHandle className="bg-slate-800/70" />
+                    <ResizablePanel defaultSize={38} minSize={24}>
+                      {renderResultSurface()}
+                    </ResizablePanel>
+                  </ResizablePanelGroup>
                 </div>
-              </div>
-            </CardHeader>
-
-            <CardContent className="space-y-4 p-4 lg:flex lg:min-h-0 lg:flex-1 lg:flex-col">
-              <Textarea
-                value={activeCode}
-                onChange={(event) => updateCode(event.target.value)}
-                disabled={isBusy || isLocked}
-                className="h-[420px] resize-none rounded-[1.5rem] border-slate-800 bg-slate-950/85 font-mono text-sm leading-7 text-slate-100 placeholder:text-slate-500 lg:min-h-0 lg:flex-1"
-                placeholder="Write your solution here."
-              />
-
-              <div className="flex flex-wrap items-center gap-3">
-                <Button
-                  type="button"
-                  onClick={() => void handleRun()}
-                  disabled={isBusy || isLocked}
-                  className="bg-sky-500 text-slate-950 hover:bg-sky-400"
-                >
-                  {isBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
-                  Run Sample
-                </Button>
-                <Button
-                  type="button"
-                  onClick={() => void handleSubmit()}
-                  disabled={isBusy || isLocked}
-                  className="bg-emerald-400 text-slate-950 hover:bg-emerald-300"
-                >
-                  {isBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
-                  Submit Samples
-                </Button>
-                <span className="text-xs leading-5 text-slate-400">
-                  Every run or submit uses one of your five total attempts.
-                </span>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="border-slate-800/80 bg-slate-950/65 text-slate-100 shadow-2xl shadow-slate-950/30 lg:min-h-[260px]">
-            <CardHeader className="border-b border-slate-800/70 pb-4">
-              <div className="flex items-center gap-2">
-                <TerminalSquare className="h-5 w-5 text-slate-300" />
-                <CardTitle className="text-xl text-slate-50">Test Result</CardTitle>
-              </div>
-            </CardHeader>
-
-            <CardContent className="space-y-4 p-4 lg:max-h-[340px] lg:overflow-y-auto">
-              {latestResult ? (
-                <>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge
-                      variant={latestResult.passed ? "default" : "destructive"}
-                      className={latestResult.passed ? "bg-emerald-400 text-slate-950 hover:bg-emerald-400" : ""}
-                    >
-                      {latestResult.passed ? (
-                        <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
-                      ) : (
-                        <XCircle className="mr-1 h-3.5 w-3.5" />
-                      )}
-                      {latestResult.verdict}
-                    </Badge>
-                    <Badge variant="outline" className="border-slate-700 bg-slate-900/60 text-slate-100">
-                      {latestResult.mode === "submit" ? "Final submit" : "Run sample"}
-                    </Badge>
-                    <span className="text-xs text-slate-400">
-                      Passed {latestResult.passed_samples}/{latestResult.total_samples} checked sample(s)
-                    </span>
-                  </div>
-
-                  <div className="space-y-3">
-                    {latestResult.sample_results.map((sampleResult, index) => (
-                      <Card
-                        key={`${sampleResult.sample_index}-${index}`}
-                        className="border-slate-800 bg-slate-900/60 text-slate-100"
-                      >
-                        <CardHeader className="pb-3">
-                          <div className="flex items-center gap-2">
-                            {sampleResult.passed ? (
-                              <CheckCircle2 className="h-4 w-4 text-emerald-300" />
-                            ) : (
-                              <XCircle className="h-4 w-4 text-rose-300" />
-                            )}
-                            <CardTitle className="text-sm">Example {sampleResult.sample_index + 1}</CardTitle>
-                            <span className="ml-auto text-xs text-slate-400">{sampleResult.judge0_status}</span>
-                          </div>
-                        </CardHeader>
-                        <CardContent className="grid gap-3 lg:grid-cols-2">
-                          <div>
-                            <p className="mb-2 text-xs uppercase tracking-[0.16em] text-slate-400">Expected</p>
-                            <pre className="overflow-x-auto whitespace-pre-wrap rounded-2xl bg-slate-950/85 p-4 font-mono text-xs leading-6 text-emerald-200">
-                              {displayValue(sampleResult.expected_output)}
-                            </pre>
-                          </div>
-                          <div>
-                            <p className="mb-2 text-xs uppercase tracking-[0.16em] text-slate-400">Actual</p>
-                            <pre className="overflow-x-auto whitespace-pre-wrap rounded-2xl bg-slate-950/85 p-4 font-mono text-xs leading-6 text-slate-100">
-                              {displayValue(sampleResult.actual_output)}
-                            </pre>
-                          </div>
-
-                          {(sampleResult.stderr || sampleResult.compile_output || sampleResult.message) && (
-                            <div className="lg:col-span-2">
-                              <p className="mb-2 text-xs uppercase tracking-[0.16em] text-slate-400">Diagnostics</p>
-                              <pre className="overflow-x-auto whitespace-pre-wrap rounded-2xl bg-rose-950/40 p-4 font-mono text-xs leading-6 text-rose-100">
-                                {displayValue(sampleResult.compile_output || sampleResult.stderr || sampleResult.message)}
-                              </pre>
-                            </div>
-                          )}
-                        </CardContent>
-                      </Card>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <div className="rounded-[1.5rem] border border-dashed border-slate-700 bg-slate-900/45 p-6 text-sm leading-7 text-slate-300">
-                  Run one of the examples to see the Judge0 result here.
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+              </>
+            ) : (
+              renderEditorSurface()
+            )}
+          </CardContent>
+        </Card>
       </div>
     </section>
   );

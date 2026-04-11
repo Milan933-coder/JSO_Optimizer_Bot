@@ -19,7 +19,7 @@ SUPPORTED_PROVIDERS = {"openai", "anthropic", "gemini"}
 # ─── Model defaults per provider ─────────────────────────────────────────────
 
 DEFAULT_MODELS = {
-    "openai":    "gpt-4o-mini",
+    "openai":    "gpt-4o",
     "anthropic": "claude-opus-4-5",
     "gemini":    "gemini-1.5-pro",
 }

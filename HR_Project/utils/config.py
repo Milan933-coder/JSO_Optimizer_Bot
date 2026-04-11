@@ -16,8 +16,11 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
 if not GOOGLE_API_KEY:
     print("WARNING: GOOGLE_API_KEY is not set. Add it to .env or utils/.env.")
-GEMINI_MODEL       = os.getenv("GEMINI_MODEL", "gemini-3-flash")
+GEMINI_MODEL       = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_MAX_TOKENS  = int(os.getenv("GEMINI_MAX_TOKENS", "2048"))
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
+CLAUDE_MODEL      = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+CLAUDE_MAX_TOKENS = int(os.getenv("CLAUDE_MAX_TOKENS", "2048"))
 
 # ── Database ───────────────────────────────────────────────
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "database", "jso_hr.db")

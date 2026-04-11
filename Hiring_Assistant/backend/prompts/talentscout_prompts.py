@@ -9,11 +9,11 @@ I'm here to help with your initial screening for tech roles.
 
 Here's what we'll do together:
 1. **Collect** a few details about you
-2. **Ask** tailored technical questions based on your tech stack
+2. **Ask** 5-10 tailored conceptual questions based on your tech stack
 3. **Open** a coding round if the interview requires it
 4. **Wrap up** and let you know the next steps
 
-To get started, please share the following information in one message or step by step:
+To get started, please complete the **candidate details form** in the main panel:
 
 - **Full Name**
 - **Email Address**
@@ -23,7 +23,7 @@ To get started, please share the following information in one message or step by
 - **Current Location**
 - **Tech Stack** (languages, frameworks, databases, tools)
 
-Whenever you're ready, go ahead!"""
+Once the form is submitted, I'll begin the technical interview right away."""
 
 
 INFO_COLLECTION_SYSTEM_PROMPT = """
@@ -66,7 +66,7 @@ EXAMPLE PARTIAL COLLECTION:
 
 
 INFO_NOT_PROVIDED_RESPONSE = (
-    "Please provide the information about yourself.\n\n"
+    "Please complete the candidate details form to continue.\n\n"
     "I need the following details to get started:\n"
     "- Full Name\n"
     "- Email Address\n"
@@ -126,7 +126,8 @@ def build_interview_opener(candidate_info: dict) -> str:
     return (
         f"Thank you, {name}! I have everything I need.\n\n"
         f"Now let's move on to the **technical assessment** for the **{position}** role.\n"
-        f"I'll ask you **3-5 questions** based on your tech stack: **{tech_stack}**.\n"
+        f"I'll ask you **5-10 conceptual questions** based on your tech stack: **{tech_stack}**.\n"
+        f"After each answer, I'll share a short review with technical and communication scores.\n"
         f"If needed, we'll follow that with one short coding round.\n\n"
         f"Take your time and answer as clearly as you can. Let's begin!\n\n"
         f"---"
@@ -215,17 +216,24 @@ def build_coding_round_completion_message(candidate_info: dict, passed_samples: 
 
 def build_question_generation_prompt(tech_stack: str, experience_years: str, position: str) -> str:
     return f"""
+You are TalentScout's Question Generator Agent.
+
 Generate a set of technical interview questions for a candidate with the following profile:
   - Tech Stack      : {tech_stack}
   - Years of Exp.   : {experience_years}
   - Target Position : {position}
 
 RULES:
-- Generate between 3 and 5 questions total.
+- Generate between 5 and 10 questions total.
+- Prefer 6 or 7 questions unless the stack is extremely broad.
 - Questions must be SPECIFIC to the declared tech stack - no generic CS questions.
-- Vary difficulty: 1 foundational, 2 intermediate, 1-2 advanced.
-- Each question must be answerable in 2-5 sentences (not a coding challenge).
-- Cover different technologies in the stack (don't ask 3 questions about the same tool).
+- Focus on concepts, trade-offs, debugging judgment, architecture, performance, security, and practical reasoning.
+- Avoid coding challenges, trivia-only questions, or yes/no questions.
+- Each question must be answerable in 3-6 sentences.
+- Cover different technologies in the stack and spread the questions across them when possible.
+- Vary difficulty: at least 2 foundational, 2-3 intermediate, and 1-3 advanced questions.
+- Each question must genuinely test whether the candidate understands the technology they claimed.
+- For each question include a short evaluation rubric of 2-4 points that a strong answer should cover.
 
 Respond ONLY in this JSON format, nothing else:
 {{
@@ -234,10 +242,113 @@ Respond ONLY in this JSON format, nothing else:
       "id": 1,
       "technology": "<specific tech this question targets>",
       "difficulty": "foundational | intermediate | advanced",
-      "question": "<the actual question text>"
+      "focus_area": "<the concept being tested>",
+      "question": "<the actual question text>",
+      "evaluation_rubric": [
+        "<point 1 a strong answer should cover>",
+        "<point 2 a strong answer should cover>"
+      ]
     }},
     ...
   ]
+}}
+"""
+
+
+def build_answer_review_prompt(question_context: dict) -> str:
+    return f"""
+You are TalentScout's Answer Review Agent.
+
+Your job is to judge whether the candidate truly understands the concept behind the question, and how clearly they explain it.
+
+QUESTION CONTEXT:
+  - Technology: {question_context.get("technology", "")}
+  - Difficulty: {question_context.get("difficulty", "")}
+  - Focus Area: {question_context.get("focus_area", "")}
+  - Question: {question_context.get("question", "")}
+  - Evaluation Rubric: {question_context.get("evaluation_rubric", [])}
+
+SCORING RULES:
+- Use ONLY the current question context and the current candidate answer.
+- Do NOT rely on any earlier messages, candidate profile details, previous answers, or earlier review scores.
+- Score technical understanding, explanation depth, and communication clarity on a 0-10 scale.
+- Be strict but fair. Reward correct reasoning, trade-off awareness, and practical understanding.
+- Communication score should judge structure, clarity, precision, and whether the explanation is easy to follow.
+- If the answer is unrelated, refuses to answer, is empty, or does not meaningfully address the question, mark it as a deviation.
+- Grammar alone should not destroy the score if the reasoning is still clear.
+
+Respond ONLY in JSON with this shape:
+{{
+  "answered_question": true,
+  "is_deviation": false,
+  "redirect_message": "",
+  "technical_score": 0,
+  "explanation_score": 0,
+  "communication_score": 0,
+  "overall_score": 0,
+  "verdict": "Weak | Needs improvement | Good | Strong",
+  "review": "2-4 sentence review of the answer",
+  "strengths": ["short point", "short point"],
+  "improvements": ["short point", "short point"],
+  "communication_notes": "1 sentence about explanation quality"
+}}
+
+If the answer is a deviation, respond with:
+{{
+  "answered_question": false,
+  "is_deviation": true,
+  "redirect_message": "A short instruction asking the candidate to answer the question directly.",
+  "technical_score": 0,
+  "explanation_score": 0,
+  "communication_score": 0,
+  "overall_score": 0,
+  "verdict": "Deviation",
+  "review": "",
+  "strengths": [],
+  "improvements": [],
+  "communication_notes": ""
+}}
+"""
+
+
+def build_final_assessment_prompt(candidate_info: dict, answered_questions: list[dict]) -> str:
+    import json
+
+    name = candidate_info.get("name", "the candidate")
+    position = candidate_info.get("desired_position", "the target role")
+    tech_stack = candidate_info.get("tech_stack", "the declared stack")
+
+    encoded_reviews = json.dumps(answered_questions, ensure_ascii=True)
+
+    return f"""
+You are TalentScout's Final Feedback Agent.
+
+Use the reviewed interview evidence below to summarize {name}'s current interview readiness for the {position} role.
+
+CANDIDATE STACK:
+{tech_stack}
+
+ANSWERED QUESTION REVIEWS:
+{encoded_reviews}
+
+RULES:
+- Base the assessment only on the supplied reviewed answers.
+- Highlight strengths, weak spots, and specific improvement directions.
+- Communication score should reflect how clearly the candidate explains ideas across the whole interview.
+- If fewer than 5 answers were reviewed, explicitly say this is a partial assessment.
+- Keep the summary practical and recruiter-friendly.
+
+Respond ONLY in JSON with this shape:
+{{
+  "status": "Strong fit | Promising but needs improvement | Needs more preparation",
+  "readiness_score": 0,
+  "technical_depth_score": 0,
+  "communication_score": 0,
+  "summary": "3-5 sentence summary",
+  "strengths": ["short point", "short point"],
+  "improvement_areas": ["short point", "short point"],
+  "recommended_actions": ["practical next step", "practical next step"],
+  "coverage_note": "Mention if this was a partial assessment, otherwise leave empty."
 }}
 """
 
