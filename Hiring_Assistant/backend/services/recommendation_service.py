@@ -1,3 +1,4 @@
+import importlib.util
 import re
 import sys
 from pathlib import Path
@@ -6,13 +7,57 @@ from typing import Optional
 from services.ai_service import chat_completion
 
 
-_WORKSPACE_ROOT = Path(__file__).resolve().parents[4]
+_WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
 _CRAWLER_ROOT = _WORKSPACE_ROOT / "crawler_agent"
-if str(_CRAWLER_ROOT) not in sys.path:
-    sys.path.append(str(_CRAWLER_ROOT))
 
-from analysis.repo_analyzer import Analyzer  # type: ignore  # noqa: E402
-from crawler.github_crawler import GithubCrawler  # type: ignore  # noqa: E402
+
+def _load_crawler_dependencies():
+    """
+    Load the local crawler_agent modules on demand from explicit file paths.
+
+    This avoids collisions with third-party packages such as the PyPI package
+    named "analysis".
+    """
+    if not _CRAWLER_ROOT.exists():
+        raise RuntimeError(
+            f"Local crawler_agent folder was not found at '{_CRAWLER_ROOT}'."
+        )
+
+    analyzer_path = _CRAWLER_ROOT / "analysis" / "repo_analyzer.py"
+    github_crawler_path = _CRAWLER_ROOT / "crawler" / "github_crawler.py"
+    if not analyzer_path.exists() or not github_crawler_path.exists():
+        raise RuntimeError(
+            "Required crawler_agent modules were not found in the local workspace."
+        )
+
+    try:
+        analyzer_module = _load_module_from_path(
+            "talentscout_local_repo_analyzer",
+            analyzer_path,
+        )
+        github_crawler_module = _load_module_from_path(
+            "talentscout_local_github_crawler",
+            github_crawler_path,
+        )
+        Analyzer = analyzer_module.Analyzer
+        GithubCrawler = github_crawler_module.GithubCrawler
+    except Exception as exc:
+        raise RuntimeError(
+            "Unable to import the local crawler_agent modules required for GitHub recommendations."
+        ) from exc
+
+    return Analyzer, GithubCrawler
+
+
+def _load_module_from_path(module_name: str, file_path: Path):
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load module spec for '{file_path}'.")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 RECOMMENDATION_KEYWORDS = (
@@ -52,6 +97,8 @@ async def generate_recommendations_from_github(
     max_repos: int = 3,
     commit_limit: int = 10,
 ) -> str:
+    Analyzer, GithubCrawler = _load_crawler_dependencies()
+
     username = extract_github_username(user_message)
     if not username:
         raise ValueError(

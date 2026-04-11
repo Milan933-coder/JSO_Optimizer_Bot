@@ -13,24 +13,16 @@ Flow:
 """
 
 import sqlite3
-import re
+import anthropic
 import sys
 import os
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from utils.config import GOOGLE_API_KEY, GEMINI_MODEL, GEMINI_MAX_TOKENS, SAFE_MODE, EXPLAIN_SQL
+from utils.config import ANTHROPIC_API_KEY, CLAUDE_MODEL, CLAUDE_MAX_TOKENS, SAFE_MODE, EXPLAIN_SQL
 from database.setup_db import get_connection, get_full_schema_context, DB_PATH
 from agents.intent_classifier import is_safe_query
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import SystemMessage, HumanMessage
-from utils.llm import extract_text
 
-llm = ChatGoogleGenerativeAI(
-    model=GEMINI_MODEL,
-    temperature=0,
-    max_output_tokens=GEMINI_MAX_TOKENS,
-    google_api_key=GOOGLE_API_KEY if GOOGLE_API_KEY else None,
-)
+client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 
 def _build_sql_system_prompt() -> str:
@@ -62,26 +54,6 @@ SQLite-specific notes:
 """
 
 
-def _extract_sql_from_text(raw_text: str) -> str:
-    """Extracts the first SQL statement starting with SELECT/WITH."""
-    text = raw_text.strip()
-    if "```" in text:
-        parts = text.split("```")
-        for part in parts:
-            part = part.strip()
-            if part.lower().startswith("sql"):
-                part = part[3:].strip()
-            if part.upper().startswith("SELECT") or part.upper().startswith("WITH"):
-                text = part
-                break
-    match = re.search(r"\b(SELECT|WITH)\b", text, re.IGNORECASE)
-    if match:
-        text = text[match.start():]
-    if ";" in text:
-        text = text.split(";", 1)[0]
-    return text.strip()
-
-
 def generate_sql(natural_query: str, intent_params: dict = None) -> dict:
     """
     Converts a natural language query to SQL using Claude.
@@ -102,12 +74,27 @@ def generate_sql(natural_query: str, intent_params: dict = None) -> dict:
         if filters:
             enhanced_query += f"\n\nExtracted filters to apply: {filters}"
 
-    response = llm.invoke([
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=enhanced_query),
-    ])
+    response = client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=CLAUDE_MAX_TOKENS,
+        system=system_prompt,
+        messages=[{"role": "user", "content": enhanced_query}]
+    )
 
-    raw_sql = _extract_sql_from_text(extract_text(response.content))
+    raw_sql = response.content[0].text.strip()
+
+    # Clean up any accidental markdown
+    if "```" in raw_sql:
+        parts = raw_sql.split("```")
+        for part in parts:
+            part = part.strip()
+            if part.upper().startswith("SELECT") or part.upper().startswith("WITH"):
+                raw_sql = part
+                break
+
+    # Remove sql prefix if present
+    if raw_sql.lower().startswith("sql\n"):
+        raw_sql = raw_sql[4:].strip()
 
     # Generate human-readable explanation if enabled
     explanation = ""
@@ -123,11 +110,16 @@ def generate_sql(natural_query: str, intent_params: dict = None) -> dict:
 
 def _explain_sql(natural_query: str, sql: str) -> str:
     """Asks Claude to explain the generated SQL in plain English."""
-    response = llm.invoke([
-        SystemMessage(content="You are a helpful assistant. Explain in 1-2 sentences what this SQL query does, in plain English for a non-technical HR professional. Be concise."),
-        HumanMessage(content=f"Original question: {natural_query}\n\nGenerated SQL: {sql}"),
-    ])
-    return extract_text(response.content)
+    response = client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=200,
+        system="You are a helpful assistant. Explain in 1-2 sentences what this SQL query does, in plain English for a non-technical HR professional. Be concise.",
+        messages=[{
+            "role": "user",
+            "content": f"Original question: {natural_query}\n\nGenerated SQL: {sql}"
+        }]
+    )
+    return response.content[0].text.strip()
 
 
 def execute_sql(sql: str) -> dict:
@@ -228,12 +220,14 @@ Error: {error_message}
 
 Return ONLY the corrected SQL query with no explanation.
 """
-    response = llm.invoke([
-        SystemMessage(content=_build_sql_system_prompt()),
-        HumanMessage(content=fix_prompt),
-    ])
+    response = client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=512,
+        system=_build_sql_system_prompt(),
+        messages=[{"role": "user", "content": fix_prompt}]
+    )
 
-    fixed_sql = _extract_sql_from_text(extract_text(response.content))
+    fixed_sql = response.content[0].text.strip()
     exec_result = execute_sql(fixed_sql)
     exec_result["generated_sql"] = fixed_sql
     exec_result["explanation"] = f"Auto-fixed SQL after error: {error_message}"

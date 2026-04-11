@@ -7,6 +7,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routes.talentscout_chat import router as talentscout_router
+from coding_round.router import router as coding_round_router
 
 app = FastAPI(
     title       = "TalentScout API",
@@ -29,6 +30,7 @@ app.add_middleware(
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(talentscout_router, prefix="/api/talentscout", tags=["TalentScout"])
+app.include_router(coding_round_router, prefix="/api/talentscout/coding-round", tags=["CodingRound"])
 
 # ── Health check ──────────────────────────────────────────────────────────────
 @app.get("/")

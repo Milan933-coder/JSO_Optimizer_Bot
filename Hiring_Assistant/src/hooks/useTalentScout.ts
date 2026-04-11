@@ -1,16 +1,16 @@
-﻿// src/hooks/useTalentScout.ts
-
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
+
+import {
+  runCodingRoundRequest,
+  startCodingRoundRequest,
+  submitCodingRoundRequest,
+} from "@/coding-round/api";
+import type { CodingRoundState } from "@/coding-round/types";
 import { API_BASE } from "@/lib/api";
+import type { ChatMessage } from "@/types/chat";
 
 export type MessageRole = "user" | "assistant";
 export type Provider = "openai" | "anthropic" | "gemini";
-
-export interface Message {
-  id: string;
-  role: MessageRole;
-  content: string;
-}
 
 interface TalentScoutOptions {
   provider: Provider;
@@ -18,16 +18,29 @@ interface TalentScoutOptions {
   whisperApiKey?: string;
   elevenLabsApiKey?: string;
   elevenLabsVoiceId?: string;
+  judge0ApiKey?: string;
+  judge0BaseUrl?: string;
 }
 
 interface TalentScoutState {
-  messages: Message[];
+  messages: ChatMessage[];
   isLoading: boolean;
   isClosed: boolean;
   phase: string;
+  codingRound: CodingRoundState | null;
   sendMessage: (content: string) => Promise<void>;
   sendVoiceMessage: (audioBlob: Blob) => Promise<void>;
   sendCvFile: (file: File) => Promise<void>;
+  startCodingRound: () => Promise<void>;
+  runCodingRound: (input: {
+    sourceCode: string;
+    languageSlug: "python" | "cpp" | "java" | "javascript";
+    sampleIndex: number;
+  }) => Promise<void>;
+  submitCodingRound: (input: {
+    sourceCode: string;
+    languageSlug: "python" | "cpp" | "java" | "javascript";
+  }) => Promise<void>;
   clearChat: () => void;
 }
 
@@ -45,7 +58,7 @@ async function safeJson(res: Response): Promise<any> {
 
 function normalizeAssistantReply(
   rawReply: string,
-  questionProgressRef: MutableRefObject<{ current: number; total: number }>
+  questionProgressRef: MutableRefObject<{ current: number; total: number }>,
 ): string {
   let reply = (rawReply || "").trim();
 
@@ -74,11 +87,14 @@ export function useTalentScout({
   whisperApiKey = "",
   elevenLabsApiKey = "",
   elevenLabsVoiceId = "",
+  judge0ApiKey = "",
+  judge0BaseUrl = "",
 }: TalentScoutOptions): TalentScoutState {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isClosed, setIsClosed] = useState(false);
   const [phase, setPhase] = useState("INFO_PENDING");
+  const [codingRound, setCodingRound] = useState<CodingRoundState | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const questionProgressRef = useRef({ current: 0, total: 0 });
 
@@ -88,10 +104,21 @@ export function useTalentScout({
     }
   }, [provider, apiKey]);
 
+  const applyServerState = (data: {
+    phase: string;
+    is_closed?: boolean;
+    coding_round?: CodingRoundState | null;
+  }) => {
+    setPhase(data.phase ?? "INFO_PENDING");
+    setIsClosed(Boolean(data.is_closed));
+    setCodingRound(data.coding_round ?? null);
+  };
+
   const initSession = async () => {
     setMessages([]);
     setIsClosed(false);
     setPhase("INFO_PENDING");
+    setCodingRound(null);
     sessionIdRef.current = null;
     questionProgressRef.current = { current: 0, total: 0 };
     setIsLoading(true);
@@ -109,7 +136,7 @@ export function useTalentScout({
       }
 
       sessionIdRef.current = data.session_id;
-      setPhase(data.phase);
+      applyServerState(data);
       appendMessage("assistant", normalizeAssistantReply(data.reply, questionProgressRef));
     } catch (err: any) {
       appendMessage("assistant", `Warning: ${err.message}`);
@@ -147,8 +174,7 @@ export function useTalentScout({
       }
 
       appendMessage("assistant", normalizeAssistantReply(data.reply, questionProgressRef));
-      setPhase(data.phase);
-      if (data.is_closed) setIsClosed(true);
+      applyServerState(data);
     } catch (err: any) {
       appendMessage("assistant", `Warning: ${err.message}`);
     } finally {
@@ -201,8 +227,7 @@ export function useTalentScout({
         appendMessage("user", data.transcript);
       }
       appendMessage("assistant", normalizeAssistantReply(data.reply, questionProgressRef));
-      setPhase(data.phase);
-      if (data.is_closed) setIsClosed(true);
+      applyServerState(data);
 
       if (data.audio_base64 && data.audio_mime_type) {
         const audio = new Audio(`data:${data.audio_mime_type};base64,${data.audio_base64}`);
@@ -246,8 +271,87 @@ export function useTalentScout({
       }
 
       appendMessage("assistant", normalizeAssistantReply(data.reply, questionProgressRef));
-      setPhase(data.phase);
-      if (data.is_closed) setIsClosed(true);
+      applyServerState(data);
+    } catch (err: any) {
+      appendMessage("assistant", `Warning: ${err.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const runCodingRound = async ({
+    sourceCode,
+    languageSlug,
+    sampleIndex,
+  }: {
+    sourceCode: string;
+    languageSlug: "python" | "cpp" | "java" | "javascript";
+    sampleIndex: number;
+  }) => {
+    if (isLoading || !sessionIdRef.current || !codingRound) return;
+
+    setIsLoading(true);
+    try {
+      const data = await runCodingRoundRequest({
+        sessionId: sessionIdRef.current,
+        sourceCode,
+        languageSlug,
+        sampleIndex,
+        judge0ApiKey,
+        judge0BaseUrl,
+      });
+
+      applyServerState(data);
+      if (data.reply) {
+        appendMessage("assistant", data.reply);
+      }
+    } catch (err: any) {
+      appendMessage("assistant", `Warning: ${err.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const startCodingRound = async () => {
+    if (isLoading || !sessionIdRef.current || isClosed) return;
+
+    setIsLoading(true);
+    try {
+      const data = await startCodingRoundRequest(sessionIdRef.current);
+      applyServerState(data);
+      if (data.reply) {
+        appendMessage("assistant", normalizeAssistantReply(data.reply, questionProgressRef));
+      }
+    } catch (err: any) {
+      appendMessage("assistant", `Warning: ${err.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const submitCodingRound = async ({
+    sourceCode,
+    languageSlug,
+  }: {
+    sourceCode: string;
+    languageSlug: "python" | "cpp" | "java" | "javascript";
+  }) => {
+    if (isLoading || !sessionIdRef.current || !codingRound) return;
+
+    setIsLoading(true);
+    try {
+      const data = await submitCodingRoundRequest({
+        sessionId: sessionIdRef.current,
+        sourceCode,
+        languageSlug,
+        judge0ApiKey,
+        judge0BaseUrl,
+      });
+
+      applyServerState(data);
+      if (data.reply) {
+        appendMessage("assistant", data.reply);
+      }
     } catch (err: any) {
       appendMessage("assistant", `Warning: ${err.message}`);
     } finally {
@@ -264,7 +368,12 @@ export function useTalentScout({
   const appendMessage = (role: MessageRole, content: string) => {
     setMessages((prev) => [
       ...prev,
-      { id: `${Date.now()}-${Math.random()}`, role, content },
+      {
+        id: `${Date.now()}-${Math.random()}`,
+        role,
+        content,
+        timestamp: new Date(),
+      },
     ]);
   };
 
@@ -273,9 +382,13 @@ export function useTalentScout({
     isLoading,
     isClosed,
     phase,
+    codingRound,
     sendMessage,
     sendVoiceMessage,
     sendCvFile,
+    startCodingRound,
+    runCodingRound,
+    submitCodingRound,
     clearChat,
   };
 }

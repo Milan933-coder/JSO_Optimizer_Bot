@@ -19,9 +19,10 @@
 #                                         [CLOSED]
 # =============================================================================
 
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import Optional, List
+from typing import Optional, List, Any
 
 
 # ─── States ──────────────────────────────────────────────────────────────────
@@ -30,6 +31,7 @@ class ConversationPhase(str, Enum):
     INFO_PENDING    = "INFO_PENDING"      # Waiting for candidate details
     INFO_COLLECTED  = "INFO_COLLECTED"    # Details received, generating questions
     INTERVIEWING    = "INTERVIEWING"      # Actively asking tech questions
+    CODING_ROUND    = "CODING_ROUND"      # Timed DSA round
     CLOSED          = "CLOSED"           # Session ended (complete or terminated)
 
 
@@ -92,6 +94,64 @@ class InterviewQuestion:
     answered:    bool = False
 
 
+@dataclass
+class CodingRoundState:
+    problem:           Optional[dict[str, Any]] = None
+    started_at:        Optional[datetime] = None
+    expires_at:        Optional[datetime] = None
+    max_attempts:      int = 5
+    attempts_used:     int = 0
+    status:            str = "idle"
+    completed:         bool = False
+    completion_reason: Optional[str] = None
+    last_result:       Optional[dict[str, Any]] = None
+
+    def start(self, problem: dict[str, Any], duration_minutes: int, max_attempts: int):
+        now = datetime.now(timezone.utc)
+        self.problem = problem
+        self.started_at = now
+        self.expires_at = now + timedelta(minutes=duration_minutes)
+        self.max_attempts = max_attempts
+        self.attempts_used = 0
+        self.status = "ready"
+        self.completed = False
+        self.completion_reason = None
+        self.last_result = None
+
+    def attempts_left(self) -> int:
+        return max(self.max_attempts - self.attempts_used, 0)
+
+    def remaining_seconds(self) -> int:
+        if not self.expires_at:
+            return 0
+        remaining = int((self.expires_at - datetime.now(timezone.utc)).total_seconds())
+        return max(remaining, 0)
+
+    def is_expired(self) -> bool:
+        return bool(self.expires_at) and datetime.now(timezone.utc) >= self.expires_at
+
+    def can_attempt(self) -> bool:
+        return (
+            self.problem is not None
+            and not self.completed
+            and not self.is_expired()
+            and self.attempts_left() > 0
+        )
+
+    def record_attempt(self):
+        self.attempts_used += 1
+        self.status = "running"
+
+    def set_last_result(self, result: dict[str, Any]):
+        self.last_result = result
+        self.status = result.get("mode", "run")
+
+    def finish(self, *, status: str, reason: str):
+        self.status = status
+        self.completed = True
+        self.completion_reason = reason
+
+
 # ─── Session State ────────────────────────────────────────────────────────────
 
 @dataclass
@@ -109,6 +169,7 @@ class SessionState:
     questions:         List[InterviewQuestion] = field(default_factory=list)
     current_question_index: int = 0
     deviation_count:   int = 0                # Max 3 before termination
+    coding_round:      CodingRoundState = field(default_factory=CodingRoundState)
 
     # Message history (for LLM context window)
     history:           List[dict] = field(default_factory=list)
@@ -174,6 +235,15 @@ class SessionState:
             len(self.questions) > 0
             and self.current_question_index >= len(self.questions)
         )
+
+    def start_coding_round(self, problem: dict[str, Any], duration_minutes: int, max_attempts: int):
+        self.coding_round.start(problem, duration_minutes, max_attempts)
+        self.phase = ConversationPhase.CODING_ROUND
+
+    def finish_coding_round(self, *, status: str, reason: str, close_session: bool = False):
+        self.coding_round.finish(status=status, reason=reason)
+        if close_session:
+            self.close(reason)
 
     # ── Session Close ────────────────────────────────────────────────────────
 
