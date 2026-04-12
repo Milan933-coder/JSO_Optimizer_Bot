@@ -1,7 +1,7 @@
 # =============================================================================
 # models/schemas.py
 # TalentScout request/response models
-# provider + api_key are sent by the frontend with every request
+# API keys may come from the frontend or backend .env defaults.
 # =============================================================================
 
 from pydantic import BaseModel, Field, field_validator
@@ -91,14 +91,15 @@ class CodingRoundPayload(BaseModel):
 
 class StartRequest(BaseModel):
     provider: SUPPORTED_PROVIDERS
-    api_key:  str
+    api_key:  Optional[str] = None
 
     @field_validator("api_key")
     @classmethod
     def api_key_not_empty(cls, v):
-        if not v or not v.strip():
-            raise ValueError("api_key must not be empty")
-        return v.strip()
+        if v is None:
+            return None
+        text = v.strip()
+        return text or None
 
 
 class StartResponse(BaseModel):
@@ -111,8 +112,16 @@ class StartResponse(BaseModel):
 class MessageRequest(BaseModel):
     session_id: str
     provider:   SUPPORTED_PROVIDERS
-    api_key:    str
+    api_key:    Optional[str] = None
     message:    str
+
+    @field_validator("api_key")
+    @classmethod
+    def normalize_api_key(cls, v):
+        if v is None:
+            return None
+        text = v.strip()
+        return text or None
 
     @field_validator("message")
     @classmethod
@@ -133,7 +142,7 @@ class MessageResponse(BaseModel):
 class CandidateInfoRequest(BaseModel):
     session_id: str
     provider: SUPPORTED_PROVIDERS
-    api_key: str
+    api_key: Optional[str] = None
     name: str
     email: str
     phone: str
@@ -141,6 +150,14 @@ class CandidateInfoRequest(BaseModel):
     desired_position: str
     location: str
     tech_stack: str
+
+    @field_validator("api_key")
+    @classmethod
+    def normalize_candidate_api_key(cls, v):
+        if v is None:
+            return None
+        text = v.strip()
+        return text or None
 
     @field_validator(
         "name",

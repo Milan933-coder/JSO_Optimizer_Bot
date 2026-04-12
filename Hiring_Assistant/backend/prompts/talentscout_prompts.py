@@ -297,7 +297,7 @@ If the answer is a deviation, respond with:
 {{
   "answered_question": false,
   "is_deviation": true,
-  "redirect_message": "A short instruction asking the candidate to answer the question directly.",
+  "redirect_message": "Please answer the specific technical question directly before we continue.",
   "technical_score": 0,
   "explanation_score": 0,
   "communication_score": 0,

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import MonacoEditor from "@monaco-editor/react";
 import {
-  BookOpenText,
   CheckCircle2,
   Clock3,
   Code2,
@@ -8,7 +8,6 @@ import {
   Loader2,
   Play,
   Send,
-  TerminalSquare,
   XCircle,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -16,11 +15,9 @@ import rehypeKatex from "rehype-katex";
 import remarkBreaks from "remark-breaks";
 import remarkMath from "remark-math";
 
-import type { CodingRoundState } from "@/coding-round/types";
+import type { CodingRoundState, CodingSampleResult } from "@/coding-round/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import {
   Select,
   SelectContent,
@@ -28,7 +25,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
 interface CodingRoundPanelProps {
@@ -44,6 +40,13 @@ interface CodingRoundPanelProps {
     languageSlug: "python" | "cpp" | "java" | "javascript";
   }) => Promise<void>;
 }
+
+type SupportedLanguage = "python" | "cpp" | "java" | "javascript";
+
+const PANEL_SHELL_CLASS =
+  "overflow-hidden rounded-2xl border border-zinc-800/80 bg-[#0b1120]/95 shadow-[0_24px_80px_rgba(2,6,23,0.45)]";
+const MINIMAL_SCROLLBAR_CLASS =
+  "[scrollbar-width:thin] [scrollbar-color:rgba(113,113,122,0.55)_transparent] [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-zinc-700/60 [&::-webkit-scrollbar-thumb:hover]:bg-zinc-600/80";
 
 function formatCountdown(totalSeconds: number): string {
   const safeSeconds = Math.max(totalSeconds, 0);
@@ -69,6 +72,13 @@ function normalizeProblemMarkdown(value?: string | null): string {
     .trim();
 }
 
+function getMonacoLanguage(language: SupportedLanguage): string {
+  if (language === "cpp") return "cpp";
+  if (language === "javascript") return "javascript";
+  if (language === "java") return "java";
+  return "python";
+}
+
 function ProblemMarkdown({
   content,
   className,
@@ -79,18 +89,18 @@ function ProblemMarkdown({
   const normalized = normalizeProblemMarkdown(content);
 
   if (!normalized) {
-    return <p className="text-sm text-slate-400">No details were provided for this section.</p>;
+    return <p className="text-sm leading-7 text-zinc-500">No details were provided for this section.</p>;
   }
 
   return (
     <div
       className={cn(
-        "problem-markdown prose prose-invert max-w-none text-sm leading-7",
-        "prose-p:my-3 prose-p:text-slate-200",
-        "prose-headings:text-slate-100 prose-strong:text-white",
-        "prose-ul:my-3 prose-ol:my-3 prose-li:text-slate-200 prose-li:marker:text-amber-300",
-        "prose-code:rounded prose-code:bg-slate-900/80 prose-code:px-1.5 prose-code:py-0.5 prose-code:text-amber-200 prose-code:before:hidden prose-code:after:hidden",
-        "prose-pre:border prose-pre:border-slate-800 prose-pre:bg-slate-950/85",
+        "problem-markdown prose prose-invert max-w-none text-sm leading-7 text-zinc-400",
+        "prose-p:my-3 prose-p:text-zinc-400",
+        "prose-headings:text-zinc-100 prose-strong:text-zinc-100",
+        "prose-ul:my-3 prose-ol:my-3 prose-li:text-zinc-400 prose-li:marker:text-zinc-500",
+        "prose-code:rounded-lg prose-code:bg-zinc-950 prose-code:px-1.5 prose-code:py-0.5 prose-code:text-zinc-200 prose-code:before:hidden prose-code:after:hidden",
+        "prose-pre:overflow-x-auto prose-pre:rounded-lg prose-pre:border prose-pre:border-zinc-800 prose-pre:bg-zinc-950 prose-pre:text-zinc-200",
         className,
       )}
     >
@@ -98,6 +108,104 @@ function ProblemMarkdown({
         {normalized}
       </ReactMarkdown>
     </div>
+  );
+}
+
+function PanelSection({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="space-y-4">
+      <h3 className="text-sm font-semibold uppercase tracking-[0.24em] text-zinc-100">{label}</h3>
+      {children}
+    </section>
+  );
+}
+
+function ValueCard({
+  label,
+  value,
+  tone = "text-zinc-200",
+}: {
+  label: string;
+  value?: string | null;
+  tone?: string;
+}) {
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-5">
+      <p className="text-xs font-semibold uppercase tracking-[0.28em] text-zinc-500">{label}</p>
+      <pre
+        className={cn(
+          "mt-3 max-h-32 overflow-auto whitespace-pre-wrap font-mono text-sm leading-7",
+          MINIMAL_SCROLLBAR_CLASS,
+          tone,
+        )}
+      >
+        {displayValue(value)}
+      </pre>
+    </div>
+  );
+}
+
+function ResultCard({ sampleResult }: { sampleResult: CodingSampleResult }) {
+  return (
+    <article className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2 text-sm font-medium text-zinc-100">
+          {sampleResult.passed ? (
+            <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+          ) : (
+            <XCircle className="h-4 w-4 text-rose-400" />
+          )}
+          Sample {sampleResult.sample_index + 1}
+        </div>
+        <span className="text-xs text-zinc-500">{sampleResult.judge0_status}</span>
+      </div>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/80 p-4">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-zinc-500">Expected Output</p>
+          <pre
+            className={cn(
+              "mt-3 max-h-28 overflow-auto whitespace-pre-wrap font-mono text-xs leading-6 text-emerald-300",
+              MINIMAL_SCROLLBAR_CLASS,
+            )}
+          >
+            {displayValue(sampleResult.expected_output)}
+          </pre>
+        </div>
+
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/80 p-4">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-zinc-500">Actual Output</p>
+          <pre
+            className={cn(
+              "mt-3 max-h-28 overflow-auto whitespace-pre-wrap font-mono text-xs leading-6 text-zinc-200",
+              MINIMAL_SCROLLBAR_CLASS,
+            )}
+          >
+            {displayValue(sampleResult.actual_output)}
+          </pre>
+        </div>
+
+        {(sampleResult.stderr || sampleResult.compile_output || sampleResult.message) && (
+          <div className="rounded-lg border border-rose-500/20 bg-rose-950/20 p-4 lg:col-span-2">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-rose-200">Diagnostics</p>
+            <pre
+              className={cn(
+                "mt-3 max-h-28 overflow-auto whitespace-pre-wrap font-mono text-xs leading-6 text-rose-100",
+                MINIMAL_SCROLLBAR_CLASS,
+              )}
+            >
+              {displayValue(sampleResult.compile_output || sampleResult.stderr || sampleResult.message)}
+            </pre>
+          </div>
+        )}
+      </div>
+    </article>
   );
 }
 
@@ -109,35 +217,26 @@ export function CodingRoundPanel({
 }: CodingRoundPanelProps) {
   const roundKey = `${codingRound.problem.codeforces_id}-${codingRound.started_at ?? "pending"}`;
   const availableLanguages = codingRound.problem.available_languages;
-  const [selectedLanguage, setSelectedLanguage] = useState<"python" | "cpp" | "java" | "javascript">("python");
+  const [selectedLanguage, setSelectedLanguage] = useState<SupportedLanguage>("python");
   const [selectedSampleIndex, setSelectedSampleIndex] = useState(0);
   const [remainingSeconds, setRemainingSeconds] = useState(codingRound.remaining_seconds);
   const [sourceByLanguage, setSourceByLanguage] = useState<Record<string, string>>({});
-  const [hasOpenedResultPanel, setHasOpenedResultPanel] = useState(Boolean(codingRound.last_result));
   const [pendingAction, setPendingAction] = useState<"run" | "submit" | null>(null);
 
   useEffect(() => {
-    const initialLanguage = (availableLanguages[0]?.slug ?? "python") as "python" | "cpp" | "java" | "javascript";
+    const initialLanguage = (availableLanguages[0]?.slug ?? "python") as SupportedLanguage;
     const initialSources = Object.fromEntries(
       availableLanguages.map((language) => [language.slug, language.starter_code]),
     );
     setSelectedLanguage(initialLanguage);
     setSelectedSampleIndex(0);
     setSourceByLanguage(initialSources);
-    setHasOpenedResultPanel(Boolean(codingRound.last_result));
     setPendingAction(null);
   }, [roundKey, availableLanguages]);
 
   useEffect(() => {
     setRemainingSeconds(codingRound.remaining_seconds);
   }, [codingRound.remaining_seconds]);
-
-  useEffect(() => {
-    if (codingRound.last_result) {
-      setHasOpenedResultPanel(true);
-      setPendingAction(null);
-    }
-  }, [codingRound.last_result]);
 
   useEffect(() => {
     if (!codingRound.is_active) return;
@@ -150,14 +249,11 @@ export function CodingRoundPanel({
   const activeCode = sourceByLanguage[selectedLanguage] ?? "";
   const latestResult = codingRound.last_result ?? null;
   const isLocked = !codingRound.is_active || codingRound.attempts_left <= 0;
-  const shouldShowResultPanel = hasOpenedResultPanel || Boolean(latestResult) || Boolean(pendingAction);
-
-  const ratingVariant = codingRound.problem.rating >= 1400 ? "default" : "secondary";
-  const statusVariant = useMemo(() => {
-    if (codingRound.is_completed && codingRound.status === "accepted") return "default";
-    if (codingRound.is_completed) return "destructive";
-    return "outline";
-  }, [codingRound.is_completed, codingRound.status]) as "default" | "secondary" | "destructive" | "outline";
+  const activeSample = codingRound.problem.samples[selectedSampleIndex] ?? codingRound.problem.samples[0];
+  const statusLabel = prettifyStatus(codingRound.status);
+  const isCriticalTimer = remainingSeconds <= 300;
+  const notesContent = codingRound.problem.notes?.trim() || "No extra notes were provided for this problem.";
+  const monacoLanguage = useMemo(() => getMonacoLanguage(selectedLanguage), [selectedLanguage]);
 
   const updateCode = (nextCode: string) => {
     setSourceByLanguage((prev) => ({
@@ -168,7 +264,6 @@ export function CodingRoundPanel({
 
   const handleRun = async () => {
     if (isBusy || isLocked) return;
-    setHasOpenedResultPanel(true);
     setPendingAction("run");
     try {
       await onRun({
@@ -183,7 +278,6 @@ export function CodingRoundPanel({
 
   const handleSubmit = async () => {
     if (isBusy || isLocked) return;
-    setHasOpenedResultPanel(true);
     setPendingAction("submit");
     try {
       await onSubmit({
@@ -195,389 +289,297 @@ export function CodingRoundPanel({
     }
   };
 
-  const handleEditorKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== "Enter" || (!event.ctrlKey && !event.metaKey)) return;
-    event.preventDefault();
-    if (event.shiftKey) {
-      void handleSubmit();
-      return;
-    }
-    void handleRun();
-  };
-
-  const renderActionBar = () => (
-    <div className="flex flex-wrap items-center gap-3 rounded-[1.4rem] border border-white/10 bg-white/5 p-3">
-      <Button
-        type="button"
-        onClick={() => void handleRun()}
-        disabled={isBusy || isLocked}
-        className="bg-sky-500 text-slate-950 hover:bg-sky-400"
-      >
-        {isBusy && pendingAction === "run" ? (
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-        ) : (
-          <Play className="mr-2 h-4 w-4" />
-        )}
-        Run Sample
-      </Button>
-      <Button
-        type="button"
-        onClick={() => void handleSubmit()}
-        disabled={isBusy || isLocked}
-        className="bg-emerald-400 text-slate-950 hover:bg-emerald-300"
-      >
-        {isBusy && pendingAction === "submit" ? (
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-        ) : (
-          <Send className="mr-2 h-4 w-4" />
-        )}
-        Submit Samples
-      </Button>
-      <div className="ml-auto text-xs leading-5 text-slate-400">
-        <p>Ctrl/Cmd + Enter runs the selected sample.</p>
-        <p>Ctrl/Cmd + Shift + Enter submits all retrieved samples.</p>
-      </div>
-    </div>
-  );
-
-  const renderEditorSurface = () => (
-    <div className="flex h-full min-h-0 flex-col gap-4 p-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <div>
-          <CardTitle className="text-xl text-slate-50">Workspace</CardTitle>
-          <p className="mt-1 text-sm text-slate-400">
-            Write your solution, pick a sample, and open results only when you are ready.
-          </p>
-        </div>
-
-        <div className="ml-auto flex min-w-[240px] items-center gap-3">
-          <Badge variant="outline" className="border-slate-700 bg-slate-900/70 text-slate-200">
-            Sample {selectedSampleIndex + 1}
-          </Badge>
-          <Select
-            value={selectedLanguage}
-            onValueChange={(value) => setSelectedLanguage(value as "python" | "cpp" | "java" | "javascript")}
-          >
-            <SelectTrigger className="border-slate-700 bg-slate-900/80 text-slate-100">
-              <SelectValue placeholder="Language" />
-            </SelectTrigger>
-            <SelectContent>
-              {availableLanguages.map((language) => (
-                <SelectItem key={language.slug} value={language.slug}>
-                  {language.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
-      <div className="grid gap-3 rounded-[1.4rem] border border-white/10 bg-slate-900/45 p-3 sm:grid-cols-2">
-        <div className="rounded-[1.2rem] border border-white/10 bg-slate-950/80 p-3">
-          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Selected Input</p>
-          <pre className="max-h-28 overflow-auto whitespace-pre-wrap font-mono text-xs leading-6 text-slate-200">
-            {displayValue(codingRound.problem.samples[selectedSampleIndex]?.input)}
-          </pre>
-        </div>
-        <div className="rounded-[1.2rem] border border-white/10 bg-slate-950/80 p-3">
-          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Expected Output</p>
-          <pre className="max-h-28 overflow-auto whitespace-pre-wrap font-mono text-xs leading-6 text-emerald-200">
-            {displayValue(codingRound.problem.samples[selectedSampleIndex]?.output)}
-          </pre>
-        </div>
-      </div>
-
-      <div className="flex min-h-0 flex-1 flex-col rounded-[1.6rem] border border-slate-800 bg-slate-950/92 p-1 shadow-inner shadow-slate-950/40">
-        <Textarea
-          value={activeCode}
-          onChange={(event) => updateCode(event.target.value)}
-          onKeyDown={handleEditorKeyDown}
-          disabled={isBusy || isLocked}
-          className="min-h-[340px] flex-1 resize-none border-0 bg-transparent px-4 py-4 font-mono text-sm leading-7 text-slate-100 placeholder:text-slate-500 focus-visible:ring-0 focus-visible:ring-offset-0"
-          placeholder="Write your solution here."
-        />
-      </div>
-
-      {renderActionBar()}
-
-      {!shouldShowResultPanel && (
-        <div className="rounded-[1.4rem] border border-dashed border-slate-700 bg-slate-900/35 px-4 py-3 text-sm leading-6 text-slate-300">
-          The result console stays hidden until you run or submit. On desktop, you can drag the divider after it opens.
-        </div>
-      )}
-    </div>
-  );
-
-  const renderResultSurface = () => (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="border-b border-slate-800/70 px-4 py-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="rounded-full bg-slate-900/80 p-2 text-slate-200">
-            <TerminalSquare className="h-4 w-4" />
-          </div>
-          <div>
-            <h3 className="text-base font-semibold text-slate-50">Execution Console</h3>
-            <p className="text-xs text-slate-400">Drag the handle to resize this panel after you run or submit.</p>
-          </div>
-        </div>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        {isBusy && pendingAction && (
-          <div className="mb-4 flex items-center gap-3 rounded-[1.3rem] border border-sky-400/20 bg-sky-400/10 px-4 py-3 text-sm text-sky-100">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            {pendingAction === "submit"
-              ? "Submitting the retrieved samples to Judge0..."
-              : "Running the selected sample with Judge0..."}
-          </div>
-        )}
-
-        {latestResult ? (
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge
-                variant={latestResult.passed ? "default" : "destructive"}
-                className={latestResult.passed ? "bg-emerald-400 text-slate-950 hover:bg-emerald-400" : ""}
-              >
-                {latestResult.passed ? (
-                  <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
-                ) : (
-                  <XCircle className="mr-1 h-3.5 w-3.5" />
-                )}
-                {latestResult.verdict}
-              </Badge>
-              <Badge variant="outline" className="border-slate-700 bg-slate-900/60 text-slate-100">
-                {latestResult.mode === "submit" ? "Final submit" : "Run sample"}
-              </Badge>
-              <span className="text-xs text-slate-400">
-                Passed {latestResult.passed_samples}/{latestResult.total_samples} checked sample(s)
-              </span>
-            </div>
-
-            {latestResult.sample_results.map((sampleResult, index) => (
-              <Card
-                key={`${sampleResult.sample_index}-${index}`}
-                className="border-slate-800 bg-slate-900/60 text-slate-100"
-              >
-                <CardHeader className="pb-3">
-                  <div className="flex items-center gap-2">
-                    {sampleResult.passed ? (
-                      <CheckCircle2 className="h-4 w-4 text-emerald-300" />
-                    ) : (
-                      <XCircle className="h-4 w-4 text-rose-300" />
-                    )}
-                    <CardTitle className="text-sm">Example {sampleResult.sample_index + 1}</CardTitle>
-                    <span className="ml-auto text-xs text-slate-400">{sampleResult.judge0_status}</span>
-                  </div>
-                </CardHeader>
-                <CardContent className="grid gap-3 lg:grid-cols-2">
-                  <div>
-                    <p className="mb-2 text-xs uppercase tracking-[0.16em] text-slate-400">Expected</p>
-                    <pre className="overflow-x-auto whitespace-pre-wrap rounded-2xl bg-slate-950/85 p-4 font-mono text-xs leading-6 text-emerald-200">
-                      {displayValue(sampleResult.expected_output)}
-                    </pre>
-                  </div>
-                  <div>
-                    <p className="mb-2 text-xs uppercase tracking-[0.16em] text-slate-400">Actual</p>
-                    <pre className="overflow-x-auto whitespace-pre-wrap rounded-2xl bg-slate-950/85 p-4 font-mono text-xs leading-6 text-slate-100">
-                      {displayValue(sampleResult.actual_output)}
-                    </pre>
-                  </div>
-
-                  {(sampleResult.stderr || sampleResult.compile_output || sampleResult.message) && (
-                    <div className="lg:col-span-2">
-                      <p className="mb-2 text-xs uppercase tracking-[0.16em] text-slate-400">Diagnostics</p>
-                      <pre className="overflow-x-auto whitespace-pre-wrap rounded-2xl bg-rose-950/40 p-4 font-mono text-xs leading-6 text-rose-100">
-                        {displayValue(sampleResult.compile_output || sampleResult.stderr || sampleResult.message)}
-                      </pre>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        ) : (
-          <div className="rounded-[1.4rem] border border-dashed border-slate-700 bg-slate-900/45 px-4 py-3 text-sm leading-6 text-slate-300">
-            Run a sample or submit to load the Judge0 output here.
-          </div>
-        )}
-      </div>
-    </div>
-  );
-
   return (
-    <section className="flex min-h-0 w-full flex-1 flex-col overflow-hidden border-t border-border/20 bg-[radial-gradient(circle_at_top,#1f2937,transparent_46%),linear-gradient(180deg,rgba(15,23,42,0.985),rgba(2,6,23,0.96))] text-slate-100">
-      <div className="border-b border-slate-800/80 px-5 py-4 sm:px-6">
-        <div className="flex flex-wrap items-start gap-3">
-          <div className="flex items-center gap-3">
-            <div className="rounded-[1.4rem] bg-amber-400/15 p-3 text-amber-200">
+    <section className="flex h-screen min-h-0 w-full flex-col overflow-hidden bg-[#0f172a] text-zinc-100">
+      <header className="sticky top-0 z-20 border-b border-zinc-800/80 bg-[#0f172a]/95 backdrop-blur-xl">
+        <div className="flex flex-col gap-6 px-6 py-5 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex items-start gap-4">
+            <div className="rounded-xl border border-sky-500/20 bg-sky-500/10 p-3 text-sky-200">
               <Code2 className="h-5 w-5" />
             </div>
-            <div>
-              <p className="text-xs uppercase tracking-[0.32em] text-slate-400">Coding Round</p>
-              <h2 className="text-2xl font-semibold tracking-tight text-white">{codingRound.problem.title}</h2>
+            <div className="space-y-2">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-zinc-500">Session Status</p>
+              <div>
+                <h2 className="text-2xl font-semibold text-zinc-100">{codingRound.problem.title}</h2>
+                <p className="text-sm leading-6 text-zinc-400">
+                  {statusLabel} with {codingRound.attempts_left}/{codingRound.max_attempts} attempts left.
+                </p>
+              </div>
             </div>
           </div>
 
-          <div className="ml-auto flex flex-wrap items-center gap-2">
-            <Badge variant={ratingVariant} className="bg-amber-400/20 text-amber-100 hover:bg-amber-400/20">
-              Rating {codingRound.problem.rating}
-            </Badge>
-            <Badge variant="outline" className="border-slate-700 bg-slate-900/60 text-slate-200">
-              <Clock3 className="mr-1 h-3.5 w-3.5" />
-              {formatCountdown(remainingSeconds)}
-            </Badge>
-            <Badge variant={statusVariant} className="border-slate-700 bg-slate-900/60 text-slate-100">
-              {prettifyStatus(codingRound.status)}
-            </Badge>
+          <div className="flex flex-col gap-3 xl:items-end">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-zinc-500">Timer / Controls</p>
+            <div className="flex flex-wrap items-center gap-3">
+              <div
+                className={cn(
+                  "inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium",
+                  isCriticalTimer
+                    ? "border-rose-400/40 bg-rose-500/10 text-rose-100"
+                    : "border-zinc-800 bg-zinc-900/80 text-zinc-100",
+                )}
+              >
+                <Clock3 className="h-4 w-4" />
+                {formatCountdown(remainingSeconds)}
+              </div>
+
+              <Badge variant="outline" className="rounded-lg border-zinc-700 bg-zinc-900/80 text-zinc-200">
+                Rating {codingRound.problem.rating}
+              </Badge>
+
+              <Badge
+                variant="outline"
+                className={cn(
+                  "rounded-lg border-zinc-700",
+                  codingRound.is_completed ? "bg-emerald-500/10 text-emerald-200" : "bg-zinc-900/80 text-zinc-200",
+                )}
+              >
+                {statusLabel}
+              </Badge>
+
+              <a
+                href={codingRound.problem.source_url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900/80 px-4 py-2 text-sm text-zinc-200 transition-colors hover:border-zinc-500 hover:bg-zinc-800"
+              >
+                Open Source
+                <ExternalLink className="h-4 w-4" />
+              </a>
+            </div>
           </div>
         </div>
+      </header>
 
-        <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-slate-300">
-          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
-            Time limit: {codingRound.problem.time_limit}
-          </span>
-          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
-            Memory limit: {codingRound.problem.memory_limit}
-          </span>
-          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
-            Attempts left: {codingRound.attempts_left}/{codingRound.max_attempts}
-          </span>
-          <a
-            href={codingRound.problem.source_url}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1 rounded-full border border-amber-300/15 bg-amber-300/10 px-3 py-1.5 text-amber-100 hover:bg-amber-300/15"
-          >
-            Open original
-            <ExternalLink className="h-3.5 w-3.5" />
-          </a>
-        </div>
-      </div>
-
-      <div className="grid min-h-0 flex-1 gap-5 p-4 lg:grid-cols-[minmax(340px,0.88fr)_minmax(480px,1.12fr)] lg:overflow-hidden sm:p-6">
-        <Card className="min-h-0 border-slate-800/80 bg-slate-950/65 text-slate-100 shadow-2xl shadow-slate-950/30 lg:flex lg:flex-col">
-          <CardHeader className="border-b border-slate-800/70 pb-4">
-            <div className="flex items-center gap-3">
-              <BookOpenText className="h-5 w-5 text-slate-300" />
-              <CardTitle className="text-xl text-slate-50">Description</CardTitle>
+      <div className="grid min-h-0 flex-1 gap-6 overflow-hidden p-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+        <aside className={PANEL_SHELL_CLASS}>
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="border-b border-zinc-800/80 p-6">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-zinc-500">Problem Description</p>
+              <h3 className="mt-2 text-lg font-semibold text-zinc-100">Read carefully before you code</h3>
             </div>
-          </CardHeader>
 
-          <CardContent className="space-y-6 p-5 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
-            <section className="space-y-3">
-              <ProblemMarkdown content={codingRound.problem.statement} />
-            </section>
+            <div className={cn("min-h-0 flex-1 space-y-8 overflow-y-auto p-6", MINIMAL_SCROLLBAR_CLASS)}>
+              <PanelSection label="Description">
+                <ProblemMarkdown content={codingRound.problem.statement} />
 
-            {codingRound.problem.input_spec && (
-              <section className="space-y-3">
-                <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Input</h3>
-                <ProblemMarkdown content={codingRound.problem.input_spec} />
-              </section>
-            )}
+                {codingRound.problem.input_spec && (
+                  <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-5">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-zinc-500">Input</p>
+                    <ProblemMarkdown content={codingRound.problem.input_spec} className="mt-3" />
+                  </div>
+                )}
 
-            {codingRound.problem.output_spec && (
-              <section className="space-y-3">
-                <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Output</h3>
-                <ProblemMarkdown content={codingRound.problem.output_spec} />
-              </section>
-            )}
+                {codingRound.problem.output_spec && (
+                  <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-5">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-zinc-500">Output</p>
+                    <ProblemMarkdown content={codingRound.problem.output_spec} className="mt-3" />
+                  </div>
+                )}
+              </PanelSection>
 
-            {codingRound.problem.samples.length > 0 && (
-              <section className="space-y-4">
-                <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Examples</h3>
+              <PanelSection label="Notes">
+                <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-5">
+                  <ProblemMarkdown content={notesContent} />
+                </div>
+              </PanelSection>
 
-                {codingRound.problem.samples.map((sample, index) => (
-                  <article
-                    key={`${sample.title}-${index}`}
-                    className={cn(
-                      "rounded-[1.4rem] border p-4 transition-colors",
-                      selectedSampleIndex === index
-                        ? "border-amber-300/35 bg-amber-300/10"
-                        : "border-white/10 bg-white/5",
-                    )}
-                  >
-                    <div className="mb-4 flex items-center justify-between gap-3">
-                      <h4 className="text-lg font-semibold text-white">Example {index + 1}</h4>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="border-slate-700 bg-slate-900/60 text-slate-100 hover:bg-slate-800"
-                        onClick={() => setSelectedSampleIndex(index)}
+              <PanelSection label="Tags">
+                <div className="flex flex-wrap gap-3">
+                  {codingRound.problem.tags.length > 0 ? (
+                    codingRound.problem.tags.map((tag) => (
+                      <span
+                        key={tag}
+                        className="rounded-lg border border-zinc-700 bg-zinc-900/80 px-3 py-2 text-xs font-medium text-zinc-300"
                       >
-                        Use For Run
-                      </Button>
+                        {tag}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-sm text-zinc-500">No tags were provided for this challenge.</span>
+                  )}
+                </div>
+              </PanelSection>
+            </div>
+          </div>
+        </aside>
+
+        <section className={cn(PANEL_SHELL_CLASS, "h-full")}>
+          <div className="flex h-full min-h-0 flex-col overflow-hidden">
+            <div className="border-b border-zinc-800/80 p-6">
+              <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                <div className="flex min-w-0 flex-wrap items-center gap-4">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-zinc-500">Workspace</p>
+                    <h3 className="text-lg font-semibold text-zinc-100">Code Editor</h3>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="w-[220px] max-w-full">
+                      <Select
+                        value={selectedLanguage}
+                        onValueChange={(value) => setSelectedLanguage(value as SupportedLanguage)}
+                      >
+                        <SelectTrigger className="h-11 rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 transition-colors hover:border-zinc-500">
+                          <SelectValue placeholder="Select language" />
+                        </SelectTrigger>
+                        <SelectContent className="border-zinc-800 bg-zinc-950 text-zinc-100">
+                          {availableLanguages.map((language) => (
+                            <SelectItem key={language.slug} value={language.slug}>
+                              {language.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
 
-                    <div className="grid gap-3 xl:grid-cols-2">
-                      <div className="space-y-2">
-                        <p className="text-sm font-semibold text-slate-100">Input</p>
-                        <pre className="overflow-x-auto whitespace-pre-wrap rounded-2xl bg-slate-950/90 p-4 font-mono text-xs leading-6 text-slate-200">
-                          {displayValue(sample.input)}
-                        </pre>
-                      </div>
-
-                      <div className="space-y-2">
-                        <p className="text-sm font-semibold text-slate-100">Output</p>
-                        <pre className="overflow-x-auto whitespace-pre-wrap rounded-2xl bg-slate-950/90 p-4 font-mono text-xs leading-6 text-emerald-200">
-                          {displayValue(sample.output)}
-                        </pre>
-                      </div>
+                    <div className="w-[180px] max-w-full">
+                      <Select value={String(selectedSampleIndex)} onValueChange={(value) => setSelectedSampleIndex(Number(value))}>
+                        <SelectTrigger className="h-11 rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 transition-colors hover:border-zinc-500">
+                          <SelectValue placeholder="Sample case" />
+                        </SelectTrigger>
+                        <SelectContent className="border-zinc-800 bg-zinc-950 text-zinc-100">
+                          {codingRound.problem.samples.map((sample, index) => (
+                            <SelectItem key={`${sample.title}-${index}`} value={String(index)}>
+                              {sample.title}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
-                  </article>
-                ))}
-              </section>
-            )}
-
-            {codingRound.problem.notes && (
-              <section className="space-y-3">
-                <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Notes</h3>
-                <ProblemMarkdown content={codingRound.problem.notes} />
-              </section>
-            )}
-
-            {codingRound.problem.tags.length > 0 && (
-              <section className="space-y-3">
-                <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Tags</h3>
-                <div className="flex flex-wrap gap-2">
-                  {codingRound.problem.tags.map((tag) => (
-                    <Badge key={tag} variant="outline" className="border-slate-700 bg-slate-900/70 text-slate-100">
-                      {tag}
-                    </Badge>
-                  ))}
-                </div>
-              </section>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="min-h-0 border-slate-800/80 bg-slate-950/65 text-slate-100 shadow-2xl shadow-slate-950/30 lg:flex lg:flex-col">
-          <CardContent className="flex min-h-0 flex-1 flex-col p-0">
-            {shouldShowResultPanel ? (
-              <>
-                <div className="lg:hidden">
-                  {renderEditorSurface()}
-                  <div className="border-t border-slate-800/70">{renderResultSurface()}</div>
+                  </div>
                 </div>
 
-                <div className="hidden min-h-0 flex-1 lg:flex">
-                  <ResizablePanelGroup direction="vertical" className="min-h-0 flex-1">
-                    <ResizablePanel defaultSize={62} minSize={42}>
-                      {renderEditorSurface()}
-                    </ResizablePanel>
-                    <ResizableHandle withHandle className="bg-slate-800/70" />
-                    <ResizablePanel defaultSize={38} minSize={24}>
-                      {renderResultSurface()}
-                    </ResizablePanel>
-                  </ResizablePanelGroup>
+                <p className="text-sm text-zinc-500">Ctrl/Cmd + Enter runs, Ctrl/Cmd + Shift + Enter submits</p>
+              </div>
+            </div>
+
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              <div className="min-h-0 flex-1 overflow-hidden bg-zinc-950">
+                <div className="h-full min-h-[500px] flex-1 overflow-y-auto">
+                  <MonacoEditor
+                    key={`${roundKey}-${selectedLanguage}`}
+                    language={monacoLanguage}
+                    theme="vs-dark"
+                    value={activeCode}
+                    onChange={(value) => updateCode(value ?? "")}
+                    height="100%"
+                    options={{
+                      automaticLayout: true,
+                      scrollBeyondLastLine: false,
+                      minimap: { enabled: false },
+                      fontSize: 15,
+                      lineHeight: 24,
+                      fontFamily:
+                        'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                      padding: { top: 20, bottom: 20 },
+                      renderLineHighlight: "gutter",
+                      lineNumbersMinChars: 3,
+                      overviewRulerBorder: false,
+                      smoothScrolling: true,
+                      scrollbar: {
+                        verticalScrollbarSize: 10,
+                        horizontalScrollbarSize: 10,
+                      },
+                    }}
+                    loading={
+                      <div className="flex h-full min-h-[500px] items-center justify-center text-sm text-zinc-500">
+                        Loading editor...
+                      </div>
+                    }
+                  />
                 </div>
-              </>
-            ) : (
-              renderEditorSurface()
-            )}
-          </CardContent>
-        </Card>
+              </div>
+
+              <div className="border-t border-zinc-800 bg-[#0a0f1d] p-6">
+                <div className="grid gap-6 md:grid-cols-2">
+                  <ValueCard label="Selected Input" value={activeSample?.input} />
+                  <ValueCard label="Expected Output" value={activeSample?.output} tone="text-emerald-300" />
+                </div>
+
+                {(pendingAction || latestResult) && (
+                  <div className="mt-6 space-y-4">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-zinc-500">Execution Results</p>
+
+                      {pendingAction && (
+                        <span className="inline-flex items-center gap-2 rounded-lg border border-sky-400/20 bg-sky-500/10 px-3 py-1.5 text-sm text-sky-100">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          {pendingAction === "submit" ? "Submitting samples..." : "Running selected sample..."}
+                        </span>
+                      )}
+
+                      {latestResult && (
+                        <>
+                          <Badge
+                            variant="outline"
+                            className={cn(
+                              "rounded-lg border-zinc-700",
+                              latestResult.passed
+                                ? "bg-emerald-500/10 text-emerald-200"
+                                : "bg-rose-500/10 text-rose-200",
+                            )}
+                          >
+                            {latestResult.verdict}
+                          </Badge>
+                          <span className="text-sm text-zinc-500">
+                            Passed {latestResult.passed_samples}/{latestResult.total_samples} checked sample(s)
+                          </span>
+                        </>
+                      )}
+                    </div>
+
+                    {latestResult && latestResult.sample_results.length > 0 ? (
+                      <div className={cn("max-h-48 space-y-4 overflow-y-auto pr-1", MINIMAL_SCROLLBAR_CLASS)}>
+                        {latestResult.sample_results.map((sampleResult, index) => (
+                          <ResultCard key={`${sampleResult.sample_index}-${index}`} sampleResult={sampleResult} />
+                        ))}
+                      </div>
+                    ) : !pendingAction ? (
+                      <p className="text-sm text-zinc-500">Run a sample or submit to populate the result tray.</p>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+
+              <footer className="sticky bottom-0 z-10 flex shrink-0 items-center justify-between gap-4 border-t border-zinc-800 bg-[#0b1120] px-6 py-4">
+                <div className="text-sm text-zinc-500">
+                  Time limit: {codingRound.problem.time_limit} • Memory limit: {codingRound.problem.memory_limit}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button
+                    type="button"
+                    onClick={() => void handleRun()}
+                    disabled={isBusy || isLocked}
+                    className="h-11 rounded-lg bg-sky-500 px-5 text-slate-950 transition-colors hover:bg-sky-400"
+                  >
+                    {isBusy && pendingAction === "run" ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Play className="mr-2 h-4 w-4" />
+                    )}
+                    Run
+                  </Button>
+
+                  <Button
+                    type="button"
+                    onClick={() => void handleSubmit()}
+                    disabled={isBusy || isLocked}
+                    className="h-11 rounded-lg bg-emerald-400 px-5 text-slate-950 transition-colors hover:bg-emerald-300"
+                  >
+                    {isBusy && pendingAction === "submit" ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Send className="mr-2 h-4 w-4" />
+                    )}
+                    Submit
+                  </Button>
+                </div>
+              </footer>
+            </div>
+          </div>
+        </section>
       </div>
     </section>
   );

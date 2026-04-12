@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { CodingRoundPanel } from "@/coding-round/CodingRoundPanel";
 import { CandidateInfoForm, type CandidateInfoFormValues } from "@/components/chat/CandidateInfoForm";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { ChatMessages } from "@/components/chat/ChatMessages";
+import { MessageBubble } from "@/components/chat/MessageBubble";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,6 +22,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Provider, useTalentScout } from "@/hooks/useTalentScout";
 import { toast } from "@/hooks/use-toast";
+import { API_BASE } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Maximize2, MessageSquarePlus, Play, Power, SlidersHorizontal } from "lucide-react";
 
@@ -32,6 +34,22 @@ const PROVIDERS: { id: Provider; name: string; color: string; placeholder: strin
 
 const DEFAULT_ELEVENLABS_VOICE_ID = "EXAVITQu4vr4xnSDxMaL";
 const DEFAULT_JUDGE0_BASE_URL = "https://ce.judge0.com";
+
+interface BackendRuntimeConfig {
+  providers: Record<Provider, { configured: boolean; envVar: string }>;
+  whisper: { configured: boolean; envVar: string };
+  elevenlabs: {
+    configured: boolean;
+    envVar: string;
+    defaultVoiceId: string;
+    defaultModelId: string;
+  };
+  judge0: {
+    configured: boolean;
+    envVar: string;
+    baseUrl: string;
+  };
+}
 
 const PHASE_LABELS: Record<string, { label: string; color: string }> = {
   INFO_PENDING: { label: "Gathering Info", color: "#f59e0b" },
@@ -57,11 +75,56 @@ export default function Chat() {
   const [elevenLabsVoiceId, setElevenLabsVoiceId] = useState(DEFAULT_ELEVENLABS_VOICE_ID);
   const [judge0ApiKey, setJudge0ApiKey] = useState("");
   const [judge0BaseUrl, setJudge0BaseUrl] = useState(DEFAULT_JUDGE0_BASE_URL);
+  const [backendConfig, setBackendConfig] = useState<BackendRuntimeConfig | null>(null);
   const [isSidebarSheetOpen, setIsSidebarSheetOpen] = useState(false);
   const [isStopDialogOpen, setIsStopDialogOpen] = useState(false);
 
   const activeKey = apiKeys[provider];
   const activeProvider = PROVIDERS.find((item) => item.id === provider)!;
+  const providerHasEnvKey = Boolean(backendConfig?.providers?.[provider]?.configured);
+  const whisperHasEnvKey = Boolean(backendConfig?.whisper?.configured);
+  const elevenLabsHasEnvKey = Boolean(backendConfig?.elevenlabs?.configured);
+  const hasProviderCredential = Boolean(activeKey.trim() || providerHasEnvKey);
+  const hasElevenLabsCredential = Boolean(elevenLabsApiKey.trim() || elevenLabsHasEnvKey);
+  const hasWhisperCredential = Boolean(
+    whisperApiKey.trim() || whisperHasEnvKey || (provider === "openai" && hasProviderCredential),
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadRuntimeConfig = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/talentscout/config`);
+        if (!response.ok) {
+          return;
+        }
+
+        const payload = (await response.json()) as BackendRuntimeConfig;
+        if (cancelled) {
+          return;
+        }
+
+        setBackendConfig(payload);
+
+        if (!elevenLabsVoiceId.trim() && payload.elevenlabs?.defaultVoiceId) {
+          setElevenLabsVoiceId(payload.elevenlabs.defaultVoiceId);
+        }
+
+        if ((!judge0BaseUrl || judge0BaseUrl === DEFAULT_JUDGE0_BASE_URL) && payload.judge0?.baseUrl) {
+          setJudge0BaseUrl(payload.judge0.baseUrl);
+        }
+      } catch {
+        return;
+      }
+    };
+
+    void loadRuntimeConfig();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const {
     messages,
@@ -83,6 +146,7 @@ export default function Chat() {
   } = useTalentScout({
     provider,
     apiKey: activeKey,
+    autoStartEnabled: hasProviderCredential,
     whisperApiKey,
     elevenLabsApiKey,
     elevenLabsVoiceId,
@@ -91,10 +155,10 @@ export default function Chat() {
   });
 
   const handleSend = async (content: string) => {
-    if (!activeKey) {
+    if (!hasProviderCredential) {
       toast({
         title: "API Key Required",
-        description: `Please enter your ${activeProvider.name} API key.`,
+        description: `Add your ${activeProvider.name} API key in the UI or set ${activeProvider.id.toUpperCase()}_API_KEY in .env.`,
         variant: "destructive",
       });
       return;
@@ -107,26 +171,26 @@ export default function Chat() {
   };
 
   const handleSendVoice = async (audioBlob: Blob) => {
-    if (!activeKey) {
+    if (!hasProviderCredential) {
       toast({
         title: "API Key Required",
-        description: `Please enter your ${activeProvider.name} API key.`,
+        description: `Add your ${activeProvider.name} API key in the UI or set ${activeProvider.id.toUpperCase()}_API_KEY in .env.`,
         variant: "destructive",
       });
       return;
     }
-    if (!elevenLabsApiKey.trim()) {
+    if (!hasElevenLabsCredential) {
       toast({
         title: "ElevenLabs Key Required",
-        description: "Add your ElevenLabs API key to enable voice replies.",
+        description: "Add your ElevenLabs API key in the UI or set ELEVENLABS_API_KEY in .env.",
         variant: "destructive",
       });
       return;
     }
-    if (provider !== "openai" && !whisperApiKey.trim()) {
+    if (provider !== "openai" && !hasWhisperCredential) {
       toast({
         title: "Whisper Key Required",
-        description: "For Anthropic/Gemini chat, add an OpenAI key for Whisper transcription.",
+        description: "For Anthropic/Gemini chat, add WHISPER_API_KEY or OPENAI_API_KEY in .env, or enter an OpenAI key in the UI.",
         variant: "destructive",
       });
       return;
@@ -140,10 +204,10 @@ export default function Chat() {
   };
 
   const handleSendCv = async (file: File) => {
-    if (!activeKey) {
+    if (!hasProviderCredential) {
       toast({
         title: "API Key Required",
-        description: `Please enter your ${activeProvider.name} API key.`,
+        description: `Add your ${activeProvider.name} API key in the UI or set ${activeProvider.id.toUpperCase()}_API_KEY in .env.`,
         variant: "destructive",
       });
       return;
@@ -167,21 +231,22 @@ export default function Chat() {
   };
 
   const phaseInfo = PHASE_LABELS[phase] ?? PHASE_LABELS.INFO_PENDING;
+  const infoPendingAssistantMessages = messages.filter((message) => message.role === "assistant");
   const candidateFormDisabledReason =
-    !activeKey
-      ? `Enter your ${activeProvider.name} API key first.`
+    !hasProviderCredential
+      ? `Add your ${activeProvider.name} API key in the UI or set ${activeProvider.id.toUpperCase()}_API_KEY in .env first.`
       : isLoading
         ? "Connecting to the interview session..."
         : !hasActiveSession
           ? sessionError || "The interview session is not ready yet. Check the API key and backend connection."
           : null;
-  const chatInputDisabled = isLoading || isClosed || !activeKey || Boolean(codingRound?.is_active);
+  const chatInputDisabled = isLoading || isClosed || !hasProviderCredential || Boolean(codingRound?.is_active);
   const canStopSession = Boolean(hasActiveSession && !isClosed && !isLoading);
   const canStartManualDsaRound = Boolean(
-    activeKey && !isLoading && !isClosed && !codingRound && phase === "INTERVIEWING",
+    hasProviderCredential && !isLoading && !isClosed && !codingRound && phase === "INTERVIEWING",
   );
-  const dsaRoundLockedReason = !activeKey
-    ? "Add your API key first."
+  const dsaRoundLockedReason = !hasProviderCredential
+    ? "Add a provider key in the UI or configure it in .env first."
     : codingRound?.is_active
       ? "The coding round is already active."
       : codingRound
@@ -298,7 +363,9 @@ export default function Chat() {
                 onChange={(event) => setApiKeys((prev) => ({ ...prev, [provider]: event.target.value }))}
                 className="border-white/10 bg-slate-950/70 font-mono text-xs text-slate-100 placeholder:text-slate-500"
               />
-              {!activeKey && <p className="text-xs text-rose-300">Key required to start</p>}
+              <p className="text-xs text-slate-400">
+                Optional if {backendConfig?.providers?.[provider]?.envVar ?? `${activeProvider.id.toUpperCase()}_API_KEY`} is set in `.env`.
+              </p>
             </div>
 
             <div className="space-y-2">
@@ -312,6 +379,7 @@ export default function Chat() {
                 onChange={(event) => setWhisperApiKey(event.target.value)}
                 className="border-white/10 bg-slate-950/70 font-mono text-xs text-slate-100 placeholder:text-slate-500"
               />
+              <p className="text-xs text-slate-400">Optional if `WHISPER_API_KEY` or `OPENAI_API_KEY` is set in `.env`.</p>
             </div>
 
             <div className="space-y-2">
@@ -325,6 +393,7 @@ export default function Chat() {
                 onChange={(event) => setElevenLabsApiKey(event.target.value)}
                 className="border-white/10 bg-slate-950/70 font-mono text-xs text-slate-100 placeholder:text-slate-500"
               />
+              <p className="text-xs text-slate-400">Optional if `ELEVENLABS_API_KEY` is set in `.env`.</p>
             </div>
 
             <div className="space-y-2">
@@ -424,7 +493,7 @@ export default function Chat() {
             variant="outline"
             className="w-full gap-2 border-white/15 bg-slate-950/60 text-slate-100 hover:bg-slate-900"
             onClick={handleClearChat}
-            disabled={!activeKey}
+            disabled={!hasProviderCredential}
           >
             <MessageSquarePlus className="h-4 w-4" />
             New Interview
@@ -441,7 +510,7 @@ export default function Chat() {
         <span className="text-sm font-medium text-foreground">{phaseInfo.label}</span>
         <span className="mx-1 text-border">.</span>
         <span className="text-xs text-muted-foreground">{activeProvider.name}</span>
-        {!activeKey && <span className="text-xs text-destructive">- API key not set</span>}
+        {!hasProviderCredential && <span className="text-xs text-destructive">- API key not set in UI or .env</span>}
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <Button
@@ -494,18 +563,34 @@ export default function Chat() {
         </div>
       )}
 
-      {!activeKey && messages.length === 0 && (
+      {!hasProviderCredential && messages.length === 0 && (
         <div className="flex flex-1 items-center justify-center px-6 text-center text-muted-foreground">
           <div>
             <p className="mb-3 text-4xl">Key</p>
-            <p className="text-sm font-medium">Enter your {activeProvider.name} API key to begin</p>
-            <p className="mt-1 text-xs">Your key is never stored - it is sent directly to the AI provider.</p>
+            <p className="text-sm font-medium">
+              Add your {activeProvider.name} API key in the UI or set it in `.env` to begin
+            </p>
+            <p className="mt-1 text-xs">
+              UI keys override `.env` values. Backend `.env` keys stay on the server.
+            </p>
           </div>
         </div>
       )}
 
-      {phase === "INFO_PENDING" && activeKey && (
-        <div className="flex-1 overflow-y-auto">
+      {phase === "INFO_PENDING" && hasProviderCredential && (
+        <div className="flex flex-1 flex-col overflow-y-auto">
+          {infoPendingAssistantMessages.length > 0 && (
+            <div className="mx-auto w-full max-w-4xl px-4 pt-6 sm:px-6 lg:pt-8">
+              <div className="rounded-[28px] border border-border/40 bg-card/55 p-4 shadow-xl shadow-slate-950/10 sm:p-5">
+                <div className="space-y-4">
+                  {infoPendingAssistantMessages.map((message) => (
+                    <MessageBubble key={message.id} message={message} />
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
           <CandidateInfoForm
             isLoading={isLoading}
             submitDisabledReason={candidateFormDisabledReason}
@@ -514,7 +599,7 @@ export default function Chat() {
         </div>
       )}
 
-      {phase !== "INFO_PENDING" && (activeKey || messages.length > 0) && (
+      {phase !== "INFO_PENDING" && (hasProviderCredential || hasActiveSession || messages.length > 0) && (
         <ChatMessages messages={messages} isLoading={isLoading} />
       )}
 

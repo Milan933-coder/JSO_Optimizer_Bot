@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
+from config import resolve_judge0_api_key, resolve_judge0_base_url
 from coding_round.session_flow import start_coding_round_for_session
 from coding_round.judge0_service import run_sample_case, submit_against_samples
 from coding_round.payloads import serialize_coding_round
@@ -16,10 +17,20 @@ from prompts.talentscout_prompts import (
     build_coding_round_completion_message,
     build_coding_round_timeout_message,
 )
-from services.conversation_manager import ConversationPhase, delete_session, get_or_create_session
+from services.conversation_manager import ConversationPhase, delete_session, get_session
 from services.interview_agents import append_final_assessment_to_reply
 
 router = APIRouter()
+
+
+def _require_session(session_id: str):
+    session = get_session(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Session not found or expired. Please start a new session.",
+        )
+    return session
 
 
 def _build_message_response(session_id: str, session, reply: str, is_closed: bool = False):
@@ -106,7 +117,7 @@ def _completion_response(session, session_id: str, action: str, result: dict) ->
 
 @router.post("/start", response_model=MessageResponse)
 async def start_coding_round(request: CodingRoundStartRequest):
-    session = get_or_create_session(request.session_id)
+    session = _require_session(request.session_id)
 
     if session.phase == ConversationPhase.CLOSED:
         raise HTTPException(status_code=409, detail="This session has already ended.")
@@ -142,7 +153,7 @@ async def start_coding_round(request: CodingRoundStartRequest):
 
 @router.post("/run", response_model=CodingRoundActionResponse)
 async def run_coding_round(request: CodingRoundAttemptRequest):
-    session = get_or_create_session(request.session_id)
+    session = _require_session(request.session_id)
     _require_active_round(session)
 
     if session.coding_round.is_expired():
@@ -160,13 +171,15 @@ async def run_coding_round(request: CodingRoundAttemptRequest):
         raise HTTPException(status_code=400, detail="Requested sample index is out of range.")
 
     try:
+        judge0_api_key = resolve_judge0_api_key(request.judge0_api_key)
+        judge0_base_url = resolve_judge0_base_url(request.judge0_base_url)
         result = await run_sample_case(
             source_code=request.source_code,
             language_slug=request.language_slug,
             sample=samples[request.sample_index],
             sample_index=request.sample_index,
-            judge0_api_key=request.judge0_api_key,
-            judge0_base_url=request.judge0_base_url,
+            judge0_api_key=judge0_api_key,
+            judge0_base_url=judge0_base_url,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Judge0 execution failed: {exc}") from exc
@@ -182,7 +195,7 @@ async def run_coding_round(request: CodingRoundAttemptRequest):
 
 @router.post("/submit", response_model=CodingRoundActionResponse)
 async def submit_coding_round(request: CodingRoundAttemptRequest):
-    session = get_or_create_session(request.session_id)
+    session = _require_session(request.session_id)
     _require_active_round(session)
 
     if session.coding_round.is_expired():
@@ -196,12 +209,14 @@ async def submit_coding_round(request: CodingRoundAttemptRequest):
         )
 
     try:
+        judge0_api_key = resolve_judge0_api_key(request.judge0_api_key)
+        judge0_base_url = resolve_judge0_base_url(request.judge0_base_url)
         result = await submit_against_samples(
             source_code=request.source_code,
             language_slug=request.language_slug,
             samples=session.coding_round.problem.get("samples", []),
-            judge0_api_key=request.judge0_api_key,
-            judge0_base_url=request.judge0_base_url,
+            judge0_api_key=judge0_api_key,
+            judge0_base_url=judge0_base_url,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Judge0 submission failed: {exc}") from exc

@@ -35,6 +35,9 @@ class ConversationPhase(str, Enum):
     CLOSED          = "CLOSED"           # Session ended (complete or terminated)
 
 
+SESSION_TTL = timedelta(hours=2)
+
+
 # ─── Candidate Info dataclass ────────────────────────────────────────────────
 
 @dataclass
@@ -192,6 +195,8 @@ class CodingRoundState:
 class SessionState:
     session_id:        str
     phase:             ConversationPhase = ConversationPhase.INFO_PENDING
+    created_at:        datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    last_accessed_at:  datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     # Candidate data
     candidate:         CandidateInfo = field(default_factory=CandidateInfo)
@@ -211,6 +216,13 @@ class SessionState:
 
     # Termination reason
     terminated_reason: Optional[str] = None   # "completed" | "deviation_limit" | "voluntary_exit"
+
+    def touch(self):
+        self.last_accessed_at = datetime.now(timezone.utc)
+
+    def is_expired(self, now: datetime | None = None) -> bool:
+        current_time = now or datetime.now(timezone.utc)
+        return (current_time - self.last_accessed_at) >= SESSION_TTL
 
     # ── Token Management ─────────────────────────────────────────────────────
 
@@ -394,11 +406,33 @@ class SessionState:
 _sessions: dict[str, SessionState] = {}
 
 
-def get_or_create_session(session_id: str) -> SessionState:
-    """Retrieve existing session or create a fresh one."""
-    if session_id not in _sessions:
-        _sessions[session_id] = SessionState(session_id=session_id)
-    return _sessions[session_id]
+def _purge_expired_sessions(now: datetime | None = None):
+    current_time = now or datetime.now(timezone.utc)
+    expired_session_ids = [
+        session_id
+        for session_id, session in _sessions.items()
+        if session.is_expired(current_time)
+    ]
+    for session_id in expired_session_ids:
+        _sessions.pop(session_id, None)
+
+
+def create_session(session_id: str) -> SessionState:
+    """Create a brand-new session."""
+    _purge_expired_sessions()
+    session = SessionState(session_id=session_id)
+    _sessions[session_id] = session
+    return session
+
+
+def get_session(session_id: str) -> Optional[SessionState]:
+    """Retrieve an existing session if it is still active."""
+    _purge_expired_sessions()
+    session = _sessions.get(session_id)
+    if session is None:
+        return None
+    session.touch()
+    return session
 
 
 def delete_session(session_id: str):

@@ -31,6 +31,17 @@ def _score(value: Any) -> float:
     return max(0.0, min(round(score, 1), 10.0))
 
 
+def _normalize_redirect_message(value: Any) -> str:
+    text = str(value or "").strip()
+    lowered = text.casefold()
+
+    # Ignore prompt-schema placeholder text so it never leaks into the UI.
+    if "short instruction" in lowered and "answer the question directly" in lowered:
+        return ""
+
+    return text
+
+
 def _normalize_question_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
     raw_questions = payload.get("questions")
     if not isinstance(raw_questions, list):
@@ -74,7 +85,7 @@ def _normalize_review_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "answered_question": answered_question,
         "is_deviation": is_deviation,
-        "redirect_message": str(payload.get("redirect_message", "")).strip(),
+        "redirect_message": _normalize_redirect_message(payload.get("redirect_message", "")),
         "technical_score": technical_score,
         "explanation_score": explanation_score,
         "communication_score": communication_score,

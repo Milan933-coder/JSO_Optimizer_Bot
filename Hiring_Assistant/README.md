@@ -1,6 +1,6 @@
 # 🎯 TalentScout — AI Hiring Assistant Chatbot
 
-TalentScout is an intelligent hiring assistant chatbot that screens tech candidates by collecting their information and generating tailored technical interview questions based on their declared tech stack. Built with **FastAPI** (backend) and **React + Vite** (frontend), it supports **OpenAI**, **Anthropic (Claude)**, and **Google Gemini** as AI providers.
+TalentScout is an intelligent hiring assistant chatbot that screens tech candidates by collecting their information and generating tailored technical interview questions based on their declared tech stack. Built with **FastAPI** (backend) and **React + Vite** (frontend), it supports **OpenAI**, **Anthropic (Claude)**, **Google Gemini**, and **ElevenLabs** for voice replies.
 
 ---
 
@@ -36,6 +36,7 @@ TalentScout automates the initial screening of tech candidates for recruitment a
 |---|---|
 | 🔐 **Info Token System** | Interview is locked until all 7 candidate fields are provided |
 | 🤖 **Multi-Provider AI** | Supports OpenAI GPT-4o, Anthropic Claude, Google Gemini |
+| 🔐 **Backend `.env` Keys** | OpenAI, Anthropic, Gemini, Whisper, ElevenLabs, and Judge0 can be configured once in `.env` |
 | ❓ **Dynamic Questions** | 3–5 tech questions generated from the candidate's exact stack |
 | ⚠️ **3-Strike Deviation Guard** | Off-topic replies trigger warnings; 3rd strike ends the session |
 | 👋 **Graceful Exit** | Keywords like "bye", "exit", "quit" end the session politely |
@@ -96,7 +97,7 @@ cv-chat-ai/                          ← repo root
 │   └── prompts/
 │       └── talentscout_prompts.py   ← All AI prompts & messages
 │
-├── .env                             ← VITE_API_URL=http://localhost:8000
+├── .env                             ← frontend URL + backend provider keys
 ├── vite.config.ts
 └── package.json
 ```
@@ -121,7 +122,33 @@ cd cv-chat-ai
 
 ---
 
-### 2. Setup the Backend
+### 2. Create the Environment File
+
+Create `Hiring_Assistant/.env` and add the keys you want to use:
+
+```env
+VITE_API_URL=http://localhost:8000
+
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+GEMINI_API_KEY=
+WHISPER_API_KEY=
+
+ELEVENLABS_API_KEY=
+ELEVENLABS_VOICE_ID=EXAVITQu4vr4xnSDxMaL
+ELEVENLABS_MODEL_ID=eleven_multilingual_v2
+
+JUDGE0_API_KEY=
+JUDGE0_BASE_URL=https://ce.judge0.com
+```
+
+Notes:
+- `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `GEMINI_API_KEY` are used as provider defaults.
+- `WHISPER_API_KEY` is optional. If it is empty, the backend falls back to `OPENAI_API_KEY`.
+- `ELEVENLABS_API_KEY` enables voice replies.
+- UI-entered keys still work and override the `.env` values for that session.
+
+### 3. Setup the Backend
 
 ```bash
 cd backend
@@ -146,16 +173,13 @@ uvicorn main:app --reload --port 8000
 
 ---
 
-### 3. Setup the Frontend
+### 4. Setup the Frontend
 
 Open a **new terminal** in the repo root:
 
 ```bash
 # Install dependencies
 npm install
-
-# Create .env file
-echo "VITE_API_URL=http://localhost:8000" > .env
 
 # Start the dev server
 npm run dev
@@ -169,7 +193,7 @@ npm run dev
 
 1. **Open** `http://localhost:8080` in your browser
 2. **Select** an AI provider from the sidebar (OpenAI / Anthropic / Gemini)
-3. **Enter** your API key for that provider
+3. **Either** use the backend `.env` keys **or** enter a key manually in the sidebar
 4. The chatbot **greets** you and asks for your details
 5. **Provide** all 7 required fields:
    - Full Name
@@ -283,7 +307,7 @@ The route code, not the LLM, enforces the 3-strike limit:
 
 ## 🔒 Data Privacy
 
-- API keys are **never stored** on the server — passed through per request
+- API keys can now be supplied through backend `.env` or passed per request from the UI
 - Candidate session data is **purged from memory** when the session closes
 - No data is written to disk or any external database
 - Compliant with GDPR data minimisation principles

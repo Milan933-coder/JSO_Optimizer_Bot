@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DNA Career Analytics Dashboard</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="dashboard-shell">
+      <section class="glass-panel hero-panel panel-enter" style="--delay: 0.05s">
+        <div class="hero-copy">
+          <span class="mode-pill">AI CV Analysis</span>
+          <p class="eyebrow">DNA Career Analytics Dashboard</p>
+          <h1>Turn a CV into a clearer hiring signal.</h1>
+          <p id="hero-summary" class="hero-description">
+            Paste a CV below to generate a personalized dashboard.
+          </p>
+
+          <div class="candidate-chip">
+            <strong id="candidate-name">Waiting for CV</strong>
+            <span id="candidate-role">Paste a CV to fill the role and location</span>
+          </div>
+        </div>
+
+        <div class="hero-side">
+          <nav class="view-switcher" aria-label="Dashboard views">
+            <button
+              type="button"
+              class="view-switcher-button is-active"
+              data-view-target="dashboard-view"
+            >
+              Dashboard
+            </button>
+            <button
+              type="button"
+              class="view-switcher-button"
+              data-view-target="upcoming-view"
+            >
+              Upcoming
+            </button>
+            <button
+              type="button"
+              class="view-switcher-button"
+              data-view-target="completed-view"
+            >
+              Completed
+            </button>
+          </nav>
+
+          <div class="hero-stats">
+            <article class="hero-stat">
+              <span class="stat-label">DNA Health</span>
+              <strong id="dna-health-score">0</strong>
+              <small>Overall readiness after CV analysis</small>
+            </article>
+            <article class="hero-stat">
+              <span class="stat-label">CV Strength</span>
+              <strong id="cv-score">0</strong>
+              <small>Resume quality after analysis</small>
+            </article>
+            <article class="hero-stat">
+              <span class="stat-label">GitHub Signal</span>
+              <strong id="github-score">0</strong>
+              <small>Only filled if the CV shows GitHub evidence</small>
+            </article>
+            <article class="hero-stat">
+              <span class="stat-label">Completeness</span>
+              <strong id="completeness-score">0%</strong>
+              <small>How complete the CV looks for hiring review</small>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="glass-panel intake-panel panel-enter" style="--delay: 0.09s">
+        <div class="section-head compact">
+          <div>
+            <p class="eyebrow">CV Intake</p>
+            <h2>Paste the CV to fill this dashboard</h2>
+          </div>
+          <p class="section-copy">
+            The dashboard stays in an empty state until a real CV is submitted for analysis.
+          </p>
+        </div>
+
+        <div class="intake-layout">
+          <label class="sr-only" for="cv-input">CV text</label>
+          <textarea
+            id="cv-input"
+            class="cv-input"
+            placeholder="Paste the full CV or resume text here..."
+          ></textarea>
+
+          <div class="intake-actions">
+            <div class="action-row">
+              <label for="cv-file-input" class="secondary-button">Load CV File</label>
+              <input
+                id="cv-file-input"
+                class="hidden-input"
+                type="file"
+                accept=".pdf,.txt,.md,.rtf,.text"
+              />
+              <button type="button" id="analyze-cv-button" class="primary-button">
+                Analyze CV
+              </button>
+              <button type="button" id="ai-assistant-button" class="assistant-button">
+                AI Assistant
+              </button>
+            </div>
+
+            <p id="cv-status" class="status-copy">
+              Paste a CV and click Analyze CV to replace the empty placeholder state.
+            </p>
+            <p class="helper-copy">
+              You can paste CV text directly or load a text-based CV file or PDF with selectable text.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="dashboard-view" class="view-screen is-active">
+        <section class="main-grid">
+          <article class="glass-panel dna-panel panel-enter" style="--delay: 0.12s">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">DNA Map</p>
+                <h2>Career signal helix</h2>
+              </div>
+              <p class="section-copy">
+                Hover over each DNA node to inspect the score, issue, and suggested next move.
+              </p>
+            </div>
+
+            <div class="legend-pills">
+              <span class="legend-pill tone-green">Strong</span>
+              <span class="legend-pill tone-purple">Improving</span>
+              <span class="legend-pill tone-red">Weak</span>
+            </div>
+
+            <div id="dna-helix" class="dna-helix" aria-label="Career DNA visualization"></div>
+          </article>
+
+          <article class="glass-panel chart-panel panel-enter" style="--delay: 0.18s">
+            <div class="section-head compact">
+              <div>
+                <p class="eyebrow">Signal Pie Chart</p>
+                <h2>Strong vs improving vs weak</h2>
+              </div>
+              <p class="section-copy">
+                Chart.js is loaded from CDN only. A local visual fallback appears if it is unavailable.
+              </p>
+            </div>
+
+            <div class="chart-stack">
+              <div class="chart-frame">
+                <canvas id="career-chart" aria-label="Career analytics pie chart"></canvas>
+
+                <div id="chart-fallback" class="chart-fallback is-hidden">
+                  <div id="fallback-donut" class="fallback-donut"></div>
+                  <p class="fallback-note">CDN chart unavailable, showing local fallback ring.</p>
+                </div>
+              </div>
+
+              <div id="chart-legend" class="chart-legend"></div>
+            </div>
+          </article>
+        </section>
+
+        <!-- Supporting information -->
+        <section class="insight-grid">
+          <article class="glass-panel info-panel trajectory-panel panel-enter" style="--delay: 0.21s">
+            <div class="section-head compact">
+              <div>
+                <p class="eyebrow">Expected Trajectory</p>
+                <h2>Which role this CV currently fits best</h2>
+              </div>
+              <p class="section-copy">
+                The model estimates job-role fit, CV structure quality, and the likely next direction from the uploaded CV.
+              </p>
+            </div>
+
+            <div class="trajectory-topline">
+              <div class="trajectory-primary">
+                <p class="trajectory-label">Best-fit role</p>
+                <strong id="trajectory-primary-role">Awaiting CV analysis</strong>
+                <p id="trajectory-summary" class="trajectory-summary">
+                  Analyze a CV to estimate the user's likely hiring direction and growth path.
+                </p>
+              </div>
+
+              <div class="trajectory-meta-grid">
+                <article class="trajectory-meta-card">
+                  <p class="trajectory-label">CV structure</p>
+                  <strong id="trajectory-structure-status">Pending</strong>
+                  <p id="trajectory-structure-note" class="trajectory-meta-copy">
+                    The dashboard will classify whether the CV looks structured or unstructured after analysis.
+                  </p>
+                </article>
+
+                <article class="trajectory-meta-card">
+                  <p class="trajectory-label">Current stage</p>
+                  <strong id="trajectory-career-stage">Pending</strong>
+                  <p id="trajectory-role-window" class="trajectory-meta-copy">
+                    The likely next role window will appear here after CV analysis.
+                  </p>
+                </article>
+              </div>
+            </div>
+
+            <div class="trajectory-columns">
+              <section class="trajectory-column">
+                <p class="trajectory-subhead">Alternative roles</p>
+                <div id="trajectory-role-chips" class="chip-row"></div>
+              </section>
+
+              <section class="trajectory-column">
+                <p class="trajectory-subhead">Evidence from the CV</p>
+                <ul id="trajectory-evidence-list" class="insight-list"></ul>
+              </section>
+
+              <section class="trajectory-column">
+                <p class="trajectory-subhead">Focus next</p>
+                <ul id="trajectory-focus-list" class="insight-list"></ul>
+              </section>
+            </div>
+          </article>
+
+          <article class="glass-panel info-panel project-advisor-panel panel-enter" style="--delay: 0.225s">
+            <div class="section-head compact">
+              <div>
+                <p class="eyebrow">Project Advisor Agent</p>
+                <h2>Which projects to improve and what to add in the CV</h2>
+              </div>
+              <p class="section-copy">
+                A separate AI pass reviews the CV again, identifies the strongest project directions, and suggests what should be enhanced or mentioned explicitly in the resume.
+              </p>
+            </div>
+
+            <p id="project-advisor-summary" class="project-advisor-summary">
+              Analyze a CV to let the project advisor identify projects to improve and what to add in the CV.
+            </p>
+
+            <div id="project-advisor-grid" class="project-advisor-grid"></div>
+          </article>
+
+          <article class="glass-panel info-panel panel-enter" style="--delay: 0.24s">
+            <p class="eyebrow">Strength Blueprint</p>
+            <h2>Signals already helping the profile</h2>
+            <ul id="strength-list" class="insight-list"></ul>
+            <div id="language-chips" class="chip-row"></div>
+          </article>
+
+          <article class="glass-panel info-panel panel-enter" style="--delay: 0.3s">
+            <p class="eyebrow">Upgrade Queue</p>
+            <h2>Highest-value actions to take next</h2>
+            <div id="recommendation-stack" class="recommendation-stack"></div>
+          </article>
+
+          <article class="glass-panel info-panel panel-enter" style="--delay: 0.36s">
+            <p class="eyebrow">Career Alerts</p>
+            <h2>Areas still holding the profile back</h2>
+            <ul id="gap-list" class="insight-list"></ul>
+          </article>
+
+          <article class="glass-panel info-panel panel-enter" style="--delay: 0.39s">
+            <p class="eyebrow">Project Suggestions</p>
+            <h2>Small projects that can strengthen this CV</h2>
+            <ul id="project-recommendation-list" class="insight-list"></ul>
+          </article>
+
+          <article class="glass-panel info-panel panel-enter" style="--delay: 0.42s">
+            <p class="eyebrow">Recruiter Lens</p>
+            <h2>How the profile may be interpreted</h2>
+            <ul id="recruiter-list" class="insight-list"></ul>
+          </article>
+        </section>
+      </section>
+
+      <section id="upcoming-view" class="view-screen">
+        <section class="list-screen">
+          <article class="glass-panel list-panel panel-enter" style="--delay: 0.12s">
+            <div class="section-head compact">
+              <div>
+                <p class="eyebrow">Upcoming</p>
+                <h2>Scheduled interviews and next conversations</h2>
+              </div>
+              <p class="section-copy">
+                This stays empty until real interview pipeline data is connected.
+              </p>
+            </div>
+            <div id="upcoming-list" class="timeline-list"></div>
+          </article>
+        </section>
+      </section>
+
+      <section id="completed-view" class="view-screen">
+        <section class="list-screen">
+          <article class="glass-panel list-panel panel-enter" style="--delay: 0.12s">
+            <div class="section-head compact">
+              <div>
+                <p class="eyebrow">Completed</p>
+                <h2>Applied rounds and final outcomes</h2>
+              </div>
+              <p class="section-copy">
+                This replaces the old demo records with a neutral empty state.
+              </p>
+            </div>
+            <div id="completed-list" class="timeline-list"></div>
+          </article>
+        </section>
+      </section>
+    </main>
+
+    <script src="../shared/analytics-fallback-data.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="./config.js"></script>
+    <script src="./script.js"></script>
+  </body>
+</html>

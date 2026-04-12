@@ -16,6 +16,7 @@ export type Provider = "openai" | "anthropic" | "gemini";
 interface TalentScoutOptions {
   provider: Provider;
   apiKey: string;
+  autoStartEnabled?: boolean;
   whisperApiKey?: string;
   elevenLabsApiKey?: string;
   elevenLabsVoiceId?: string;
@@ -63,6 +64,10 @@ interface TalentScoutResponsePayload {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Something went wrong.";
+}
+
+function isMissingSessionMessage(message: string): boolean {
+  return /session not found or expired/i.test(message);
 }
 
 async function safeJson(res: Response): Promise<TalentScoutResponsePayload> {
@@ -118,6 +123,7 @@ function buildCandidateSummary(values: CandidateInfoFormValues): string {
 export function useTalentScout({
   provider,
   apiKey,
+  autoStartEnabled = false,
   whisperApiKey = "",
   elevenLabsApiKey = "",
   elevenLabsVoiceId = "",
@@ -142,6 +148,25 @@ export function useTalentScout({
     setIsClosed(Boolean(data.is_closed));
     setCodingRound(data.coding_round ?? null);
   };
+
+  const invalidateSession = useCallback((message: string) => {
+    sessionIdRef.current = null;
+    setIsClosed(false);
+    setPhase("INFO_PENDING");
+    setCodingRound(null);
+    setSessionError(message);
+  }, []);
+
+  const recordError = useCallback((error: unknown): string => {
+    const message = getErrorMessage(error);
+    if (isMissingSessionMessage(message)) {
+      invalidateSession(message);
+      return message;
+    }
+
+    setSessionError(message);
+    return message;
+  }, [invalidateSession]);
 
   const initSession = useCallback(async () => {
     setMessages([]);
@@ -174,16 +199,15 @@ export function useTalentScout({
       });
       appendMessage("assistant", normalizeAssistantReply(data.reply ?? "", questionProgressRef));
     } catch (error: unknown) {
-      const message = getErrorMessage(error);
-      setSessionError(message);
+      const message = recordError(error);
       appendMessage("assistant", `Warning: ${message}`);
     } finally {
       setIsLoading(false);
     }
-  }, [apiKey, provider]);
+  }, [apiKey, provider, recordError]);
 
   useEffect(() => {
-    if (provider && apiKey && apiKey.trim().length > 10) {
+    if (provider && autoStartEnabled) {
       void initSession();
     } else {
       sessionIdRef.current = null;
@@ -192,13 +216,13 @@ export function useTalentScout({
       setPhase("INFO_PENDING");
       setCodingRound(null);
     }
-  }, [provider, apiKey, initSession]);
+  }, [provider, autoStartEnabled, initSession]);
 
   const sendMessage = async (content: string) => {
     if (!content.trim() || isLoading || isClosed) return;
 
     if (!sessionIdRef.current) {
-      const warning = "Session not started yet. Please wait or re-enter your API key.";
+      const warning = "Session not started yet. Please wait or check your UI key / backend .env configuration.";
       setSessionError(warning);
       appendMessage("assistant", `Warning: ${warning}`);
       return;
@@ -232,7 +256,8 @@ export function useTalentScout({
         coding_round: data.coding_round,
       });
     } catch (error: unknown) {
-      appendMessage("assistant", `Warning: ${getErrorMessage(error)}`);
+      const message = recordError(error);
+      appendMessage("assistant", `Warning: ${message}`);
     } finally {
       setIsLoading(false);
     }
@@ -242,7 +267,7 @@ export function useTalentScout({
     if (isLoading || isClosed) return;
 
     if (!sessionIdRef.current) {
-      const warning = "Session not started yet. Please wait or re-enter your API key.";
+      const warning = "Session not started yet. Please wait or check your UI key / backend .env configuration.";
       setSessionError(warning);
       appendMessage("assistant", `Warning: ${warning}`);
       return;
@@ -283,8 +308,7 @@ export function useTalentScout({
       });
       setSessionError(null);
     } catch (error: unknown) {
-      const message = getErrorMessage(error);
-      setSessionError(message);
+      const message = recordError(error);
       appendMessage("assistant", `Warning: ${message}`);
     } finally {
       setIsLoading(false);
@@ -295,14 +319,9 @@ export function useTalentScout({
     if (!audioBlob || audioBlob.size === 0 || isLoading || isClosed) return;
 
     if (!sessionIdRef.current) {
-      const warning = "Session not started yet. Please wait or re-enter your API key.";
+      const warning = "Session not started yet. Please wait or check your UI key / backend .env configuration.";
       setSessionError(warning);
       appendMessage("assistant", `Warning: ${warning}`);
-      return;
-    }
-
-    if (!elevenLabsApiKey.trim()) {
-      appendMessage("assistant", "Warning: ElevenLabs API key is required for voice output.");
       return;
     }
 
@@ -353,8 +372,7 @@ export function useTalentScout({
         });
       }
     } catch (error: unknown) {
-      const message = getErrorMessage(error);
-      setSessionError(message);
+      const message = recordError(error);
       appendMessage("assistant", `Warning: ${message}`);
     } finally {
       setIsLoading(false);
@@ -365,7 +383,7 @@ export function useTalentScout({
     if (!file || isLoading || isClosed) return;
 
     if (!sessionIdRef.current) {
-      const warning = "Session not started yet. Please wait or re-enter your API key.";
+      const warning = "Session not started yet. Please wait or check your UI key / backend .env configuration.";
       setSessionError(warning);
       appendMessage("assistant", `Warning: ${warning}`);
       return;
@@ -400,8 +418,7 @@ export function useTalentScout({
       });
       setSessionError(null);
     } catch (error: unknown) {
-      const message = getErrorMessage(error);
-      setSessionError(message);
+      const message = recordError(error);
       appendMessage("assistant", `Warning: ${message}`);
     } finally {
       setIsLoading(false);
@@ -436,8 +453,7 @@ export function useTalentScout({
         appendMessage("assistant", data.reply);
       }
     } catch (error: unknown) {
-      const message = getErrorMessage(error);
-      setSessionError(message);
+      const message = recordError(error);
       appendMessage("assistant", `Warning: ${message}`);
     } finally {
       setIsLoading(false);
@@ -456,8 +472,7 @@ export function useTalentScout({
         appendMessage("assistant", normalizeAssistantReply(data.reply, questionProgressRef));
       }
     } catch (error: unknown) {
-      const message = getErrorMessage(error);
-      setSessionError(message);
+      const message = recordError(error);
       appendMessage("assistant", `Warning: ${message}`);
     } finally {
       setIsLoading(false);
@@ -491,8 +506,7 @@ export function useTalentScout({
         appendMessage("assistant", normalizeAssistantReply(data.reply, questionProgressRef));
       }
     } catch (error: unknown) {
-      const message = getErrorMessage(error);
-      setSessionError(message);
+      const message = recordError(error);
       appendMessage("assistant", `Warning: ${message}`);
     } finally {
       setIsLoading(false);
@@ -524,8 +538,7 @@ export function useTalentScout({
         appendMessage("assistant", data.reply);
       }
     } catch (error: unknown) {
-      const message = getErrorMessage(error);
-      setSessionError(message);
+      const message = recordError(error);
       appendMessage("assistant", `Warning: ${message}`);
     } finally {
       setIsLoading(false);
@@ -533,7 +546,7 @@ export function useTalentScout({
   };
 
   const clearChat = () => {
-    if (provider && apiKey) {
+    if (provider && autoStartEnabled) {
       void initSession();
     }
   };

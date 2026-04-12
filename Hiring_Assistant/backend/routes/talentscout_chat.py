@@ -8,6 +8,14 @@ import uuid
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
+from config import (
+    get_public_runtime_config,
+    resolve_elevenlabs_api_key,
+    resolve_elevenlabs_model_id,
+    resolve_elevenlabs_voice_id,
+    resolve_provider_api_key,
+    resolve_whisper_api_key,
+)
 from coding_round.payloads import serialize_coding_round
 from coding_round.session_flow import (
     is_start_coding_round_intent,
@@ -37,8 +45,9 @@ from prompts.talentscout_prompts import (
 from services.ai_service import chat_completion, extract_text_from_pdf_bytes, summarize_cv_text_with_model, synthesize_speech_elevenlabs, transcribe_audio_whisper
 from services.conversation_manager import (
     ConversationPhase,
+    create_session,
     delete_session,
-    get_or_create_session,
+    get_session,
 )
 from services.interview_agents import (
     append_final_assessment_to_reply,
@@ -56,20 +65,34 @@ from services.recommendation_service import (
 router = APIRouter()
 
 
-DEFAULT_ELEVENLABS_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"
-DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2"
+def _require_session(session_id: str):
+    session = get_session(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Session not found or expired. Please start a new session.",
+        )
+    return session
+
+
+@router.get("/config")
+async def get_runtime_config():
+    return get_public_runtime_config()
 
 
 @router.post("/start", response_model=StartResponse)
 async def start_session(request: StartRequest):
     try:
+        effective_api_key = resolve_provider_api_key(request.provider, request.api_key)
         await chat_completion(
             provider=request.provider,
-            api_key=request.api_key,
+            api_key=effective_api_key,
             system_prompt="You are a helpful assistant.",
             messages=[{"role": "user", "content": "Say OK"}],
             max_tokens=5,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=401,
@@ -77,7 +100,7 @@ async def start_session(request: StartRequest):
         ) from exc
 
     session_id = str(uuid.uuid4())
-    session = get_or_create_session(session_id)
+    session = create_session(session_id)
     session.add_message("assistant", GREETING_MESSAGE)
 
     return StartResponse(
@@ -178,7 +201,11 @@ async def _prepare_interview_from_candidate_info(session, provider: str, api_key
 
 @router.post("/candidate-info", response_model=MessageResponse)
 async def submit_candidate_info(request: CandidateInfoRequest):
-    session = get_or_create_session(request.session_id)
+    session = _require_session(request.session_id)
+    try:
+        effective_api_key = resolve_provider_api_key(request.provider, request.api_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if session.phase == ConversationPhase.CLOSED:
         return MessageResponse(
@@ -209,14 +236,14 @@ async def submit_candidate_info(request: CandidateInfoRequest):
         raise HTTPException(status_code=422, detail="All candidate fields are required.")
 
     session.add_message("user", _candidate_summary_text(session.candidate.to_dict()))
-    final_reply = await _prepare_interview_from_candidate_info(session, request.provider, request.api_key)
+    final_reply = await _prepare_interview_from_candidate_info(session, request.provider, effective_api_key)
     session.add_message("assistant", final_reply)
     return _build_message_response(request.session_id, session, final_reply)
 
 
 @router.post("/stop", response_model=MessageResponse)
 async def stop_session(request: StopSessionRequest):
-    session = get_or_create_session(request.session_id)
+    session = _require_session(request.session_id)
 
     if session.phase == ConversationPhase.CLOSED:
         return MessageResponse(
@@ -232,10 +259,13 @@ async def stop_session(request: StopSessionRequest):
 
 @router.post("/message", response_model=MessageResponse)
 async def chat(request: MessageRequest):
-    session = get_or_create_session(request.session_id)
+    session = _require_session(request.session_id)
     user_msg = request.message
     provider = request.provider
-    api_key = request.api_key
+    try:
+        api_key = resolve_provider_api_key(provider, request.api_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if session.phase == ConversationPhase.CLOSED:
         return MessageResponse(
@@ -383,12 +413,12 @@ async def chat(request: MessageRequest):
 async def voice_chat(
     session_id: str = Form(...),
     provider: str = Form(...),
-    api_key: str = Form(...),
-    elevenlabs_api_key: str = Form(...),
+    api_key: str | None = Form(default=None),
+    elevenlabs_api_key: str | None = Form(default=None),
     audio_file: UploadFile = File(...),
     whisper_api_key: str | None = Form(default=None),
-    elevenlabs_voice_id: str = Form(default=DEFAULT_ELEVENLABS_VOICE_ID),
-    elevenlabs_model_id: str = Form(default=DEFAULT_ELEVENLABS_MODEL_ID),
+    elevenlabs_voice_id: str | None = Form(default=None),
+    elevenlabs_model_id: str | None = Form(default=None),
 ):
     try:
         audio_bytes = await audio_file.read()
@@ -398,12 +428,18 @@ async def voice_chat(
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="audio_file is empty")
 
-    effective_whisper_key = (whisper_api_key or api_key).strip()
-    if not effective_whisper_key:
-        raise HTTPException(
-            status_code=400,
-            detail="A Whisper/OpenAI API key is required (whisper_api_key or api_key).",
+    try:
+        effective_provider_key = resolve_provider_api_key(provider, api_key)
+        effective_whisper_key = resolve_whisper_api_key(
+            provider,
+            whisper_api_key,
+            api_key,
         )
+        effective_elevenlabs_key = resolve_elevenlabs_api_key(elevenlabs_api_key)
+        effective_voice_id = resolve_elevenlabs_voice_id(elevenlabs_voice_id)
+        effective_model_id = resolve_elevenlabs_model_id(elevenlabs_model_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
         transcript, detected_language = await transcribe_audio_whisper(
@@ -420,7 +456,7 @@ async def voice_chat(
             MessageRequest(
                 session_id=session_id,
                 provider=provider,
-                api_key=api_key,
+                api_key=effective_provider_key,
                 message=transcript,
             )
         )
@@ -431,10 +467,10 @@ async def voice_chat(
 
     try:
         speech_bytes, speech_mime = await synthesize_speech_elevenlabs(
-            elevenlabs_api_key=elevenlabs_api_key,
+            elevenlabs_api_key=effective_elevenlabs_key,
             text=chat_response.reply,
-            voice_id=elevenlabs_voice_id,
-            model_id=elevenlabs_model_id,
+            voice_id=effective_voice_id,
+            model_id=effective_model_id,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"ElevenLabs TTS failed: {exc}") from exc
@@ -447,7 +483,7 @@ async def voice_chat(
         phase=chat_response.phase,
         is_closed=chat_response.is_closed,
         coding_round=chat_response.coding_round,
-        voice_id=elevenlabs_voice_id,
+        voice_id=effective_voice_id,
         audio_mime_type=speech_mime,
         audio_base64=base64.b64encode(speech_bytes).decode("ascii"),
     )
@@ -457,7 +493,7 @@ async def voice_chat(
 async def cv_intake(
     session_id: str = Form(...),
     provider: str = Form(...),
-    api_key: str = Form(...),
+    api_key: str | None = Form(default=None),
     cv_file: UploadFile = File(...),
 ):
     filename = (cv_file.filename or "").lower()
@@ -475,14 +511,17 @@ async def cv_intake(
         raise HTTPException(status_code=400, detail="cv_file is empty.")
 
     try:
+        effective_api_key = resolve_provider_api_key(provider, api_key)
         extracted_text = extract_text_from_pdf_bytes(file_bytes)
         if not extracted_text:
             raise HTTPException(status_code=422, detail="Could not extract text from PDF CV.")
         profile_text = await summarize_cv_text_with_model(
             provider=provider,
-            api_key=api_key,
+            api_key=effective_api_key,
             cv_text=extracted_text,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:
         raise
     except Exception as exc:
@@ -495,7 +534,7 @@ async def cv_intake(
         MessageRequest(
             session_id=session_id,
             provider=provider,
-            api_key=api_key,
+            api_key=effective_api_key,
             message=profile_text.strip(),
         )
     )
